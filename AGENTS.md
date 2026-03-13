@@ -19,7 +19,7 @@ The canonical design document is this file plus `docs/`. `RELEASING.md` covers t
 | `examples/` | Runnable examples for manual and CI testing |
 | `docs/` | Documentation site (MkDocs) — system of record |
 | `extensions/vscode/` | VS Code / Cursor extension (TypeScript, CLI-backed) |
-| `scripts/bump_version.py` | Keeps version in sync across all four version files |
+| `scripts/bump_version.py` | Keeps version in sync across all version files (run via `make bump-*`) |
 | `.github/workflows/` | CI, docs deploy, build artifacts, release |
 | `Makefile` | All standard development commands |
 | `RELEASING.md` | Full release procedure |
