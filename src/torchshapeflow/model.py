@@ -55,6 +55,7 @@ class TensorShape:
 @dataclass(frozen=True)
 class TensorValue:
     shape: TensorShape
+    # TODO: populate and use origin to provide richer hover diagnostics (e.g. "inferred from param x")
     origin: str | None = None
 
     @property

@@ -91,7 +91,25 @@ jobs:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: npx ovsx publish dist/torch-shape-flow.vsix -p "$OVSX_PAT"
 
+  publish-testpypi:
+    if: contains(github.ref, '-rc') || contains(github.ref, '-test')
+    needs: build-python
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: testpypi
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
   publish-pypi:
+    if: "!contains(github.ref, '-rc') && !contains(github.ref, '-test')"
     needs: build-python
     runs-on: ubuntu-latest
     permissions:

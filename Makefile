@@ -38,12 +38,15 @@ extension-package:
 
 bump-patch:
 	uv run python scripts/bump_version.py patch
+	uv lock
 
 bump-minor:
 	uv run python scripts/bump_version.py minor
+	uv lock
 
 bump-major:
 	uv run python scripts/bump_version.py major
+	uv lock
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist site extensions/vscode/dist extensions/vscode/out

@@ -38,9 +38,9 @@ make typecheck # mypy .
 | `extension-build` | `npm run build` in `extensions/vscode` | Development build of the VS Code extension |
 | `extension-package` | `npm run package` in `extensions/vscode` | Package `.vsix` into `extensions/vscode/dist/` |
 | `build` | `python-dist` + `extension-package` | Build all release artifacts |
-| `bump-patch` | `scripts/bump_version.py patch` | Bump patch version in all four version files |
-| `bump-minor` | `scripts/bump_version.py minor` | Bump minor version |
-| `bump-major` | `scripts/bump_version.py major` | Bump major version |
+| `bump-patch` | `scripts/bump_version.py patch` + `uv lock` | Bump patch version across all version files and lock |
+| `bump-minor` | `scripts/bump_version.py minor` + `uv lock` | Bump minor version |
+| `bump-major` | `scripts/bump_version.py major` + `uv lock` | Bump major version |
 | `clean` | `rm -rf ...` | Remove build and cache artifacts |
 
 ## CI workflows
@@ -49,20 +49,16 @@ All workflows live in `.github/workflows/`.
 
 ### `ci.yml` — every push and pull request
 
-1. Format check (`ruff format . --check`)
-2. Lint (`ruff check .`)
-3. Type-check (`mypy .`)
-4. Tests (`pytest -q`)
-5. Docs build (`mkdocs build`)
-6. VS Code extension build (`npm run build`)
+Two jobs run in parallel:
 
-Matrix: Python 3.10, 3.11, 3.12, 3.13.
+- **`check`** (runs once on Python 3.12): format check, lint, type-check, docs build, VS Code extension build.
+- **`test`** (matrix: Python 3.10, 3.11, 3.12, 3.13): `pytest -q`.
 
 ### `docs.yml` — push to `main` and manual trigger
 
 Builds the MkDocs site and deploys it to GitHub Pages.
 
-### `build-artifacts.yml` — every push, PR, and manual trigger
+### `build-artifacts.yml` — push to `main`, PR, and manual trigger
 
 Builds and uploads two artifacts:
 
@@ -113,11 +109,12 @@ See `RELEASING.md` in the repository root for the full release procedure includi
 
 ## Version management
 
-Version is kept in sync across four files by `scripts/bump_version.py`:
+Version is kept in sync across five files by `scripts/bump_version.py` + `uv lock`:
 
 - `pyproject.toml`
 - `src/torchshapeflow/_version.py`
 - `extensions/vscode/package.json`
 - `extensions/vscode/package-lock.json`
+- `uv.lock`
 
 Always use `make bump-patch / bump-minor / bump-major`. Never edit version files by hand.

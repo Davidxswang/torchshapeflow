@@ -67,45 +67,50 @@ These commands update:
 - `src/torchshapeflow/_version.py`
 - `extensions/vscode/package.json`
 - `extensions/vscode/package-lock.json`
+- `uv.lock` (via `uv lock`)
 
 ## Release Procedure
 
-Recommended release sequence:
+### Test release (TestPyPI)
 
-1. Ensure the working tree is clean enough for release work.
-2. Run `make check`.
-3. Run one of:
-   - `make bump-patch`
-   - `make bump-minor`
-   - `make bump-major`
-4. Review the version changes.
-5. Commit the release version update.
-6. Create and push a Git tag in the form `vX.Y.Z`.
-
-Example:
+Use a tag containing `-rc` or `-test` to publish to TestPyPI only:
 
 ```bash
-git add pyproject.toml src/torchshapeflow/_version.py extensions/vscode/package.json extensions/vscode/package-lock.json
+git tag v0.1.1-rc1
+git push origin v0.1.1-rc1
+```
+
+Install from TestPyPI to verify:
+
+```bash
+pip install --index-url https://test.pypi.org/simple/ torchshapeflow
+```
+
+### Production release (PyPI)
+
+Once satisfied, bump the version, commit, and push a clean semver tag:
+
+```bash
+make check
+make bump-patch   # or bump-minor / bump-major
+git add pyproject.toml src/torchshapeflow/_version.py extensions/vscode/package.json extensions/vscode/package-lock.json uv.lock
 git commit -m "Release v0.1.1"
 git tag v0.1.1
 git push origin main --tags
 ```
 
-Pushing a `v*` tag triggers the release workflow.
+Pushing a clean `vX.Y.Z` tag (no `-rc` or `-test` suffix) triggers the full release workflow.
 
 ## What the Release Workflow Does
 
-On a tag like `v0.1.1`, [release.yml](/home/david/torchshapeflow/.github/workflows/release.yml) will:
+On a tag like `v0.1.1`, `release.yml` will:
 
-1. Build Python artifacts:
-   - wheel
-   - source distribution
-2. Build and package the VS Code extension:
-   - `.vsix`
+1. Build Python artifacts (wheel + sdist).
+2. Build and package the VS Code extension (`.vsix`).
 3. Publish to PyPI.
 4. Optionally publish to the VS Code Marketplace if `VSCE_PAT` exists.
 5. Optionally publish to Open VSX if `OVSX_PAT` exists.
-6. Create a GitHub release containing the built artifacts.
+6. Create a GitHub release with all artifacts attached.
 
 ## Artifact Locations
 

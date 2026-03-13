@@ -9,7 +9,7 @@ PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path("src/torchshapeflow/_version.py")
 EXTENSION_PACKAGE_PATH = Path("extensions/vscode/package.json")
 EXTENSION_LOCK_PATH = Path("extensions/vscode/package-lock.json")
-VERSION_PATTERN = re.compile(r'^version = "(?P<version>\d+)\.(\d+)\.(\d+)"$', re.MULTILINE)
+VERSION_PATTERN = re.compile(r'^version = "(?P<version>\d+\.\d+\.\d+)"$', re.MULTILINE)
 PYTHON_VERSION_PATTERN = re.compile(
     r'^__version__ = "(?P<version>\d+)\.(\d+)\.(\d+)"$',
     re.MULTILINE,
