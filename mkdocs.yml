@@ -3,6 +3,11 @@ site_description: Static AST-based PyTorch tensor shape analysis.
 repo_name: torchshapeflow
 theme:
   name: material
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
 nav:
   - Overview: index.md
   - Quickstart: quickstart.md
