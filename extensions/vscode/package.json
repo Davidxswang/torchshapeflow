@@ -1,0 +1,68 @@
+{
+  "name": "torch-shape-flow",
+  "displayName": "Torch Shape Flow",
+  "description": "Static PyTorch tensor shape diagnostics and hover information.",
+  "version": "0.1.0",
+  "publisher": "torchshapeflow",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Davidxswang/torchshapeflow.git"
+  },
+  "homepage": "https://github.com/Davidxswang/torchshapeflow",
+  "bugs": {
+    "url": "https://github.com/Davidxswang/torchshapeflow/issues"
+  },
+  "files": [
+    "out/**",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "onCommand:torchShapeFlow.runAnalysis"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "torchShapeFlow.runAnalysis",
+        "title": "Torch Shape Flow: Run Analysis"
+      }
+    ],
+    "configuration": {
+      "title": "Torch Shape Flow",
+      "properties": {
+        "torchShapeFlow.cliPath": {
+          "type": "string",
+          "default": "tsf",
+          "description": "Path to the TorchShapeFlow CLI executable."
+        },
+        "torchShapeFlow.runOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run Torch Shape Flow when a Python file is saved."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./tsconfig.json",
+    "watch": "tsc -w -p ./tsconfig.json",
+    "package": "mkdir -p dist && npm run build && npx @vscode/vsce package -o dist/torch-shape-flow.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.8.3"
+  }
+}

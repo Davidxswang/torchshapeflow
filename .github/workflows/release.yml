@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/*
+
+  build-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - working-directory: extensions/vscode
+        run: npm ci
+      - working-directory: extensions/vscode
+        run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension
+          path: extensions/vscode/dist/*.vsix
+
+  publish-vscode-marketplace:
+    if: ${{ secrets.VSCE_PAT != '' }}
+    needs: build-extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - working-directory: extensions/vscode
+        run: npm ci
+      - working-directory: extensions/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish -p "$VSCE_PAT"
+
+  publish-open-vsx:
+    if: ${{ secrets.OVSX_PAT != '' }}
+    needs: build-extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - working-directory: extensions/vscode
+        run: npm ci
+      - working-directory: extensions/vscode
+        run: npm run package
+      - working-directory: extensions/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish dist/torch-shape-flow.vsix -p "$OVSX_PAT"
+
+  publish-pypi:
+    needs: build-python
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: [build-python, build-extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: vscode-extension
+          path: extensions/vscode/dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            extensions/vscode/dist/*.vsix

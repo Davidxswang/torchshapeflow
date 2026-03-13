@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "torchshapeflow"
+version = "0.1.0"
+description = "Static AST-based PyTorch tensor shape analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "TorchShapeFlow Contributors" }]
+dependencies = [
+  "typer>=0.16.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Davidxswang/torchshapeflow"
+Repository = "https://github.com/Davidxswang/torchshapeflow"
+Issues = "https://github.com/Davidxswang/torchshapeflow/issues"
+Documentation = "https://davidxswang.github.io/torchshapeflow/"
+
+[project.optional-dependencies]
+dev = [
+  "mkdocs>=1.6.0",
+  "mkdocs-material>=9.5.0",
+  "mypy>=1.18.0",
+  "pytest>=8.3.0",
+  "ruff>=0.11.0",
+]
+
+[project.scripts]
+tsf = "torchshapeflow.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/torchshapeflow"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/docs",
+  "/examples",
+  "/scripts",
+  "/.github",
+  "/README.md",
+  "/DESIGN.md",
+  "/mkdocs.yml",
+  "/Makefile",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+strict = true
+packages = ["torchshapeflow"]
+exclude = [
+  "^examples/",
+  "^tests/fixtures/",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

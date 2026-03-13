@@ -1,0 +1,14 @@
+site_name: TorchShapeFlow
+site_description: Static AST-based PyTorch tensor shape analysis.
+repo_name: torchshapeflow
+theme:
+  name: material
+nav:
+  - Overview: index.md
+  - Quickstart: quickstart.md
+  - Syntax: syntax.md
+  - Operators: operators.md
+  - Limitations: limitations.md
+  - Architecture: architecture.md
+  - Development: development.md
+  - Extension: extension.md
