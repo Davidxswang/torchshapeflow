@@ -4,7 +4,33 @@ on:
   push:
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - run: uv sync --extra dev
+      - run: uv run ruff format . --check
+      - run: uv run ruff check .
+      - run: uv run mypy .
+      - run: uv run mkdocs build
+      - working-directory: extensions/vscode
+        run: npm ci
+      - working-directory: extensions/vscode
+        run: npm run build
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -16,18 +42,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: extensions/vscode/package-lock.json
       - run: uv sync --extra dev
-      - run: uv run ruff format . --check
-      - run: uv run ruff check .
-      - run: uv run mypy .
       - run: uv run pytest -q
-      - run: uv run mkdocs build
-      - working-directory: extensions/vscode
-        run: npm ci
-      - working-directory: extensions/vscode
-        run: npm run build

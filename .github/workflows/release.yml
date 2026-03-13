@@ -6,7 +6,24 @@ on:
       - "v*"
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
+  check-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      has-vsce-pat: ${{ steps.check.outputs.has-vsce-pat }}
+      has-ovsx-pat: ${{ steps.check.outputs.has-ovsx-pat }}
+    steps:
+      - id: check
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          echo "has-vsce-pat=${{ secrets.VSCE_PAT != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has-ovsx-pat=${{ secrets.OVSX_PAT != '' }}" >> "$GITHUB_OUTPUT"
+
   build-python:
     runs-on: ubuntu-latest
     steps:
@@ -40,8 +57,8 @@ jobs:
           path: extensions/vscode/dist/*.vsix
 
   publish-vscode-marketplace:
-    if: ${{ secrets.VSCE_PAT != '' }}
-    needs: build-extension
+    if: needs.check-secrets.outputs.has-vsce-pat == 'true'
+    needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,8 +75,8 @@ jobs:
         run: npx @vscode/vsce publish -p "$VSCE_PAT"
 
   publish-open-vsx:
-    if: ${{ secrets.OVSX_PAT != '' }}
-    needs: build-extension
+    if: needs.check-secrets.outputs.has-ovsx-pat == 'true'
+    needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
