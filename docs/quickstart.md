@@ -61,7 +61,7 @@ mymodel.py: ok
 
 ```
 broken.py:9:9 error TSF1004 Invalid reshape.
-broken.py:17:12 error TSF1006 Broadcasting incompatibility.
+broken.py:17:12 warning TSF1006 Broadcasting compatibility cannot be verified statically.
 ```
 
 Exit code is `0` when no errors are found, `1` otherwise.

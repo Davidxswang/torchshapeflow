@@ -76,8 +76,8 @@ These commands update:
 Use a tag containing `-rc` or `-test` to publish to TestPyPI only:
 
 ```bash
-git tag v0.1.1-rc1
-git push origin v0.1.1-rc1
+git tag vX.Y.Z-rc1
+git push origin vX.Y.Z-rc1
 ```
 
 Install from TestPyPI to verify:
@@ -94,8 +94,8 @@ Once satisfied, bump the version, commit, and push a clean semver tag:
 make check
 make bump-patch   # or bump-minor / bump-major
 git add pyproject.toml src/torchshapeflow/_version.py extensions/vscode/package.json extensions/vscode/package-lock.json uv.lock
-git commit -m "Release v0.1.1"
-git tag v0.1.1
+git commit -m "Release vX.Y.Z"
+git tag vX.Y.Z
 git push origin main --tags
 ```
 
@@ -103,7 +103,7 @@ Pushing a clean `vX.Y.Z` tag (no `-rc` or `-test` suffix) triggers the full rele
 
 ## What the Release Workflow Does
 
-On a tag like `v0.1.1`, `release.yml` will:
+On a clean `vX.Y.Z` tag, `release.yml` will:
 
 1. Build Python artifacts (wheel + sdist).
 2. Build and package the VS Code extension (`.vsix`).
@@ -129,4 +129,3 @@ Expected outputs:
 
 - If marketplace secrets are not configured, the workflow still succeeds for packaging and GitHub release creation.
 - If PyPI trusted publishing is not configured correctly, the PyPI publish job will fail.
-- The extension package currently uses `--allow-missing-repository`; adding the final public repository URL to the extension manifest later would remove that exception.

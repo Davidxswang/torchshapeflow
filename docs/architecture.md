@@ -69,16 +69,17 @@ Spec values are stored in `module_specs` (keyed by attribute name) when their co
 
 ## Diagnostic codes
 
-| Code | Trigger |
-|---|---|
-| `TSF1001` | Annotation parse error (malformed `Annotated` or `Shape`) |
-| `TSF1003` | Incompatible `matmul` / `bmm` shapes |
-| `TSF1004` | Invalid `reshape` or `flatten` dimensions |
-| `TSF1005` | Invalid `cat` or `stack` dimensions or mismatched shapes |
-| `TSF1006` | Broadcasting incompatibility |
-| `TSF1007` | `nn.Linear`, `nn.Conv2d`, or `nn.MaxPool2d`/`AvgPool2d` input shape mismatch |
-| `TSF1008` | Invalid `permute`, `transpose`, `squeeze`, or `unsqueeze` dimensions |
-| `TSF1009` | Return shape does not match the declared return type annotation |
+| Code | Severity | Trigger |
+|---|---|---|
+| `TSF1001` | error | Annotation parse error (malformed `Annotated` or `Shape`) |
+| `TSF1002` | — | Reserved (not used) |
+| `TSF1003` | error | Incompatible `matmul` / `bmm` shapes |
+| `TSF1004` | error | Invalid `reshape` or `flatten` dimensions |
+| `TSF1005` | error | Invalid `cat` or `stack` dimensions or mismatched shapes |
+| `TSF1006` | error or warning | Broadcasting incompatibility (error when both dims are constant; warning when one or both are symbolic) |
+| `TSF1007` | error | `nn.Linear`, `nn.Conv2d`, or `nn.MaxPool2d`/`AvgPool2d` input shape mismatch |
+| `TSF1008` | error | Invalid `permute`, `transpose`, `squeeze`, or `unsqueeze` dimensions |
+| `TSF1009` | error | Return shape does not match the declared return type annotation |
 
 ## Adding a new operator
 
