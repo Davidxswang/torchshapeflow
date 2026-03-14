@@ -7,24 +7,35 @@ The extension provides inline shape diagnostics and hover information for tensor
 The extension is CLI-backed: on each file save (or on demand), it runs `tsf check --json` against the active Python file, then surfaces:
 
 - **Diagnostics** — red underlines at the location of shape errors with human-readable messages.
-- **Hover shapes** — when you hover over a tensor variable, the inferred shape is shown (e.g. `Tensor[B, 12, T, 64]`).
+- **Hover shapes** — hover over a tensor variable to see its inferred shape (e.g. `[B, 12, T, 64]`), or hover over a function name to see the full shape signature of its tensor parameters and return value.
 
 The extension does not run a background language server. Each check is a fresh `tsf` invocation against the current file.
 
 ## Installing
 
-The `.vsix` file is attached to each GitHub release under Assets. Install it manually:
+Search for **Torch Shape Flow** in the VS Code or Cursor Extensions panel and click Install.
+
+Alternatively, download the `.vsix` from the [GitHub Releases](https://github.com/Davidxswang/torchshapeflow/releases) page and install manually:
 
 ```
 Extensions panel → ⋯ (More Actions) → Install from VSIX...
 ```
 
-Once the extension is published to the VS Code Marketplace, it will be installable directly from the Extensions search panel.
-
 ## Requirements
 
-- `tsf` must be available on `PATH`, or configured in the extension settings.
-- The extension requires VS Code ≥ 1.85 or a compatible Cursor version.
+The extension requires the `torchshapeflow` Python package:
+
+```bash
+pip install torchshapeflow
+```
+
+The extension looks for `tsf` in this order:
+
+1. `.venv/bin/tsf` in the workspace root — picked up automatically if you use a local virtual environment
+2. The path in `torchShapeFlow.cliPath` (see Settings below)
+3. `tsf` on your system `PATH`
+
+The extension requires VS Code ≥ 1.90 or a compatible Cursor version.
 
 ## Building locally
 

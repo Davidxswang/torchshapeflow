@@ -57,7 +57,7 @@ See [docs/development.md](docs/development.md) for the full development guide: a
 
 ## Release
 
-See [RELEASING.md](RELEASING.md) for the full release procedure.
+See [docs/releasing.md](docs/releasing.md) for the full release procedure.
 
 Build commands:
 
