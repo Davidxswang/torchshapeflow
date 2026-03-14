@@ -1,7 +1,7 @@
 # TorchShapeFlow — Agent Guide
 
 TorchShapeFlow is a static, AST-based shape analyzer for PyTorch. No runtime dependency on torch.
-The canonical design document is this file plus `docs/`. `RELEASING.md` covers the release procedure.
+The canonical design document is this file plus `docs/`. `docs/releasing.md` covers the release procedure.
 
 ## Repo map
 
@@ -22,7 +22,7 @@ The canonical design document is this file plus `docs/`. `RELEASING.md` covers t
 | `scripts/bump_version.py` | Keeps version in sync across all version files (run via `make bump-*`) |
 | `.github/workflows/` | CI, docs deploy, build artifacts, release |
 | `Makefile` | All standard development commands |
-| `RELEASING.md` | Full release procedure |
+| `docs/releasing.md` | Full release procedure |
 
 ## Key commands
 
@@ -52,7 +52,7 @@ make clean         # remove build and cache artifacts
 | Annotation syntax (`Shape`, string vs int dims, TypeAlias) | `docs/syntax.md` |
 | Known limitations and non-goals | `docs/limitations.md` |
 | VS Code / Cursor extension | `docs/extension.md` |
-| Release procedure | `RELEASING.md` |
+| Release procedure | `docs/releasing.md` |
 
 ## Engineering principles
 
