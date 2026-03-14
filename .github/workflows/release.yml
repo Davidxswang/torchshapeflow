@@ -54,7 +54,7 @@ jobs:
           path: extensions/vscode/dist/*.vsix
 
   publish-vscode-marketplace:
-    if: needs.check-secrets.outputs.has-vsce-pat == 'true'
+    if: needs.check-secrets.outputs.has-vsce-pat == 'true' && !contains(github.ref, '-rc') && !contains(github.ref, '-test')
     needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
@@ -72,7 +72,7 @@ jobs:
         run: npx @vscode/vsce publish -p "$VSCE_PAT"
 
   publish-open-vsx:
-    if: needs.check-secrets.outputs.has-ovsx-pat == 'true'
+    if: needs.check-secrets.outputs.has-ovsx-pat == 'true' && !contains(github.ref, '-rc') && !contains(github.ref, '-test')
     needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
