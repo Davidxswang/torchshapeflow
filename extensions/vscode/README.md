@@ -1,32 +1,62 @@
-# Torch Shape Flow VS Code Extension
+# Torch Shape Flow
 
-This extension shells out to `tsf check --json` and turns analyzer output into:
-
-- editor diagnostics
-- hover shape information
-
-## Current behavior
-
-- runs on the active Python file
-- can run automatically on save
-- can be triggered manually with the `Torch Shape Flow: Run Analysis` command
-- caches the latest analyzer result per file for hover lookup
-- can be packaged locally with `npm run package`
+Static PyTorch tensor shape diagnostics and hover information — without running your code.
 
 ## Requirements
 
-- `tsf` must be available on your `PATH`, or configured explicitly in the extension settings
-- the Python project should be analyzable by the TorchShapeFlow CLI
+The extension requires the `torchshapeflow` Python package to be installed:
 
-## Release publishing
+```bash
+pip install torchshapeflow
+```
 
-GitHub Actions can publish this extension conditionally:
+Or, if your project uses a virtual environment:
 
-- `VSCE_PAT` enables publishing to the VS Code Marketplace
-- `OVSX_PAT` enables publishing to Open VSX
+```bash
+uv add torchshapeflow        # uv projects
+pip install torchshapeflow   # pip/venv projects
+```
 
-If those secrets are not configured, release workflows still package `dist/torchshapeflow.vsix` and attach it to the GitHub release.
+## CLI discovery
 
-## Notes
+The extension looks for `tsf` in this order:
 
-The current hover implementation uses analyzer-reported symbol facts and a name-based fallback, so it is intentionally lightweight. A richer editor experience can be built later on top of the same JSON contract or a future long-running backend.
+1. `.venv/bin/tsf` in your workspace root (picked up automatically if you use a local virtual environment)
+2. The path configured in `torchShapeFlow.cliPath` (see Settings below)
+3. `tsf` on your system `PATH`
+
+If your project uses a local `.venv`, no configuration is needed.
+
+## Features
+
+- **Diagnostics** — shape mismatches and invalid operations are highlighted inline as errors or warnings
+- **Hover** — hover over any tensor variable or function parameter to see its inferred shape
+
+## Usage
+
+The analyzer runs automatically when you save a Python file. You can also trigger it manually:
+
+- Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run **Torch Shape Flow: Run Analysis**
+
+## Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `torchShapeFlow.cliPath` | `tsf` | Path to the `tsf` executable, if not on PATH or in `.venv` |
+| `torchShapeFlow.runOnSave` | `true` | Run the analyzer automatically on save |
+
+## Annotation syntax
+
+Annotate your function parameters with `Shape` to enable shape inference:
+
+```python
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def forward(self, x: Annotated[torch.Tensor, Shape("B", 3, 32, 32)]):
+    y = self.conv(x)   # hover shows: [B, 8, 32, 32]
+    ...
+```
+
+See the [full documentation](https://davidxswang.github.io/torchshapeflow) for supported operators and annotation syntax.
