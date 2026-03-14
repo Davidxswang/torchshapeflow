@@ -90,6 +90,8 @@ def infer_reshape(tensor: TensorValue, requested: tuple[Dim | int, ...]) -> Tens
                 return None
         return TensorValue(TensorShape(tuple(requested_dims)))
     inferred = quotient_dim(tensor.shape.dims, tuple(requested_dims))
+    if inferred is None:
+        return None
     output_dims: list[Dim] = []
     for item in requested:
         if item == -1:

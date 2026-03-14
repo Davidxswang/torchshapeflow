@@ -153,12 +153,28 @@ def test_subscript_slice_constant_computes_size() -> None:
     assert str(result.shape) == "[2, C]"
 
 
-def test_subscript_slice_no_upper_keeps_dim() -> None:
-    # x[1:] on [B, C]: upper is unknown, so dim is preserved.
+def test_subscript_slice_no_upper_symbolic_keeps_dim() -> None:
+    # x[1:] on [B, C]: first dim is symbolic, so cannot compute — preserved.
     result = infer_subscript(_t("B", "C"), _subscript_node("x[1:]"))
     assert result is not None
     assert isinstance(result, TensorValue)
     assert str(result.shape) == "[B, C]"
+
+
+def test_subscript_slice_no_upper_constant_computes() -> None:
+    # x[1:] on [32, C]: first dim is constant 32, so 32-1=31.
+    result = infer_subscript(_t(32, "C"), _subscript_node("x[1:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[31, C]"
+
+
+def test_subscript_slice_negative_lower_constant() -> None:
+    # x[-2:] on [10, C]: 10 - (10-2) = 2.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-2:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[2, C]"
 
 
 def test_subscript_none_inserts_dim() -> None:

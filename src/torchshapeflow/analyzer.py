@@ -39,6 +39,7 @@ from torchshapeflow.model import (
     broadcast_has_uncertain_dims,
     make_dim,
     normalize_index,
+    render_dim,
 )
 from torchshapeflow.parser import AnnotationParseError, parse_source, parse_tensor_annotation
 from torchshapeflow.report import FileReport, HoverFact
@@ -306,6 +307,7 @@ def _collect_class_specs(
         class_specs: dict[str, ModuleSpec] = {}
         for child in node.body:
             if isinstance(child, ast.FunctionDef) and child.name == "__init__":
+                init_params = _collect_init_param_defaults(child)
                 for statement in child.body:
                     if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
                         target = statement.targets[0]
@@ -314,7 +316,7 @@ def _collect_class_specs(
                             and isinstance(target.value, ast.Name)
                             and target.value.id == "self"
                         ):
-                            spec = _parse_module_spec(statement.value)
+                            spec = _parse_module_spec(statement.value, init_params)
                             if spec is not None:
                                 class_specs[target.attr] = spec
         if class_specs:
@@ -322,21 +324,54 @@ def _collect_class_specs(
     return specs
 
 
+def _collect_init_param_defaults(func: ast.FunctionDef) -> dict[str, int]:
+    """Extract integer default values from ``__init__`` parameters.
+
+    Python aligns defaults right-to-left with parameters, so ``def f(a, b=1, c=2)``
+    has ``args.args = [a, b, c]`` and ``args.defaults = [1, 2]``.
+    """
+    params: dict[str, int] = {}
+    args = func.args
+    n_defaults = len(args.defaults)
+    n_args = len(args.args)
+    for i, default in enumerate(args.defaults):
+        arg = args.args[n_args - n_defaults + i]
+        val = int_from_ast(default)
+        if val is not None:
+            params[arg.arg] = val
+    return params
+
+
+def _int_from_ast_with_params(node: ast.AST, init_params: dict[str, int] | None) -> int | None:
+    """Try ``int_from_ast`` first, then fall back to ``__init__`` parameter defaults."""
+    val = int_from_ast(node)
+    if val is not None:
+        return val
+    if init_params and isinstance(node, ast.Name) and node.id in init_params:
+        return init_params[node.id]
+    return None
+
+
 def _parse_module_spec(
     node: ast.AST,
+    init_params: dict[str, int] | None = None,
 ) -> ModuleSpec | None:
     if not isinstance(node, ast.Call):
         return None
     name = qualified_name(node.func)
     short_name = name.split(".")[-1]
+
+    def _int(n: ast.AST) -> int | None:
+        return _int_from_ast_with_params(n, init_params)
+
     if name.endswith("Linear") and len(node.args) >= 2:
-        in_features = int_from_ast(node.args[0])  # may be None (non-literal)
-        out_features = int_from_ast(node.args[1])
+        in_features = _int(node.args[0])  # may be None (non-literal)
+        out_features = _int(node.args[1])
         if out_features is not None:
             return LinearSpec(in_features=in_features, out_features=out_features)
     if name.endswith("Conv2d") and len(node.args) >= 3:
-        in_channels = int_from_ast(node.args[0])  # may be None (non-literal)
-        out_channels = int_from_ast(node.args[1])
+        in_channels = _int(node.args[0])  # may be None (non-literal)
+        out_channels = _int(node.args[1])
         kernel_size = _int_pair(node.args[2])
         stride = _int_pair(_keyword_or_default(node, "stride"), default=(1, 1))
         padding = _int_pair(_keyword_or_default(node, "padding"), default=(0, 0))
@@ -356,7 +391,7 @@ def _parse_module_spec(
                 dilation=dilation,
             )
     if short_name == "Embedding" and len(node.args) >= 2:
-        embedding_dim = int_from_ast(node.args[1])
+        embedding_dim = _int(node.args[1])
         if embedding_dim is not None:
             return EmbeddingSpec(embedding_dim=embedding_dim)
     if name.endswith("MaxPool2d") and node.args:
@@ -383,13 +418,13 @@ def _parse_module_spec(
     if short_name == "Sequential":
         sub_specs: list[ModuleSpec] = []
         for arg in node.args:
-            sub = _parse_module_spec(arg)
+            sub = _parse_module_spec(arg, init_params)
             if sub is not None:
                 sub_specs.append(sub)
         return SequentialSpec(specs=tuple(sub_specs))
     if short_name == "MultiheadAttention" and len(node.args) >= 2:
-        embed_dim = int_from_ast(node.args[0])
-        num_heads = int_from_ast(node.args[1])
+        embed_dim = _int(node.args[0])
+        num_heads = _int(node.args[1])
         batch_first_node = _keyword_or_default(node, "batch_first")
         batch_first = False
         if isinstance(batch_first_node, ast.Constant) and isinstance(batch_first_node.value, bool):
@@ -593,6 +628,80 @@ def _analyze_statement(
         return
     if isinstance(statement, ast.Expr):
         _eval_expr(statement.value, env, context, module_specs)
+        return
+    if isinstance(statement, ast.If):
+        _analyze_if(statement, env, context, module_specs)
+        return
+
+
+def _analyze_if(
+    node: ast.If,
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> None:
+    """Analyze an if/else block by walking both branches and merging environments.
+
+    If both branches exist, variables assigned with the same shape in both are
+    kept; variables assigned with different shapes get ``UnknownDim("?")`` for
+    differing dimensions. Variables assigned in only one branch are dropped.
+    If there is no ``else``, assignments from the ``if`` body are kept (since
+    the condition may or may not hold, keeping them is pragmatically useful
+    for patterns like ``if mask is not None: mask = mask.unsqueeze(1)``).
+    """
+    pre_env = dict(env)
+    env_then: dict[str, Value] = dict(env)
+    for stmt in node.body:
+        _analyze_statement(stmt, env_then, context, module_specs)
+    if node.orelse:
+        env_else: dict[str, Value] = dict(pre_env)
+        for stmt in node.orelse:
+            _analyze_statement(stmt, env_else, context, module_specs)
+        _merge_envs(env, pre_env, env_then, env_else)
+    else:
+        # No else: take the ``if`` body environment (pragmatically useful).
+        env.update(env_then)
+
+
+def _merge_envs(
+    env: dict[str, Value],
+    pre_env: dict[str, Value],
+    env_then: dict[str, Value],
+    env_else: dict[str, Value],
+) -> None:
+    """Merge two branch environments into *env*.
+
+    For each key in the union of ``env_then`` and ``env_else``:
+    - If both have the same shape (by string) → keep it.
+    - If both are TensorValues with the same rank but different dims → merge
+      dimension-wise, keeping matching dims and using ``UnknownDim("?")`` for
+      differing ones.
+    - If the key existed before the ``if`` and was not changed by either → keep it.
+    - Otherwise → drop the key from env.
+    """
+    all_keys = set(env_then) | set(env_else)
+    env.clear()
+    for key in all_keys:
+        then_val = env_then.get(key)
+        else_val = env_else.get(key)
+        if then_val is not None and else_val is not None:
+            if isinstance(then_val, TensorValue) and isinstance(else_val, TensorValue):
+                if str(then_val.shape) == str(else_val.shape):
+                    env[key] = then_val
+                elif then_val.rank == else_val.rank:
+                    merged_dims: list[Dim] = []
+                    for d1, d2 in zip(then_val.shape.dims, else_val.shape.dims, strict=True):
+                        if render_dim(d1) == render_dim(d2):
+                            merged_dims.append(d1)
+                        else:
+                            merged_dims.append(UnknownDim("?"))
+                    env[key] = TensorValue(TensorShape(tuple(merged_dims)))
+                # Different ranks: drop the key
+            elif type(then_val) is type(else_val) and then_val == else_val:
+                env[key] = then_val
+            # Different types or values: drop the key
+        elif key in pre_env:
+            env[key] = pre_env[key]
 
 
 def _bind_target(
@@ -993,7 +1102,18 @@ def _eval_call(
                 arg_val = _eval_expr(arg_node, env, context, module_specs)
                 if isinstance(arg_val, TensorValue):
                     sub = unify_dims(param_tv.shape.dims, arg_val.shape.dims)
-                    mapping.update(sub)
+                    for sym_name, bound_dim in sub.items():
+                        if sym_name in mapping and render_dim(mapping[sym_name]) != render_dim(
+                            bound_dim
+                        ):
+                            context.error(
+                                node,
+                                "TSF1010",
+                                f"Symbolic dim '{sym_name}' bound to conflicting values: "
+                                f"{render_dim(mapping[sym_name])} vs {render_dim(bound_dim)}.",
+                            )
+                        else:
+                            mapping[sym_name] = bound_dim
             return TensorValue(apply_substitution(sig.return_shape.shape, mapping))
     return None
 
