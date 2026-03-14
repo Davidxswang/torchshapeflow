@@ -52,6 +52,56 @@ def encode(x: ImageBatch) -> FeatureMap:
     ...
 ```
 
+TypeAliases may also be defined in a separate file and imported:
+
+```python
+# shapes.py
+from typing import Annotated, TypeAlias
+import torch
+from torchshapeflow import Shape
+
+ImageBatch: TypeAlias = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
+```
+
+```python
+# model.py
+from shapes import ImageBatch
+
+def preprocess(x: ImageBatch):
+    y = x.permute(0, 2, 3, 1)  # [B, H, W, 3] — inferred correctly
+```
+
+Both `X = Annotated[...]` (plain assignment) and `X: TypeAlias = Annotated[...]` (annotated assignment) are supported.
+
+## Cross-file function calls
+
+When a function in another file has tensor-annotated parameters and a tensor return annotation, calling it propagates the return shape. Symbolic dimensions from the parameter annotation are unified with the concrete shapes at the call site:
+
+```python
+# helpers.py
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def embed(
+    x: Annotated[torch.Tensor, Shape("B", "T")],
+) -> Annotated[torch.Tensor, Shape("B", "T", 512)]:
+    ...
+```
+
+```python
+# main.py
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+from helpers import embed
+
+def run(tokens: Annotated[torch.Tensor, Shape("B", "T")]):
+    out = embed(tokens)  # inferred: [B, T, 512]
+```
+
+Same-file function calls with annotated signatures are supported too.
+
 ## Accepted tensor type expressions
 
 The following base types are recognized as tensor annotations:

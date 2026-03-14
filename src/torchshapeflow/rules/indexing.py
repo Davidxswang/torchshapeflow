@@ -30,6 +30,21 @@ def infer_subscript(
         the index is out of bounds or the expression is unsupported.
     """
     if isinstance(value, ShapeTupleValue):
+        # Slice of shape tuple (e.g. x.shape[-2:]) → ShapeTupleValue of the selected dims.
+        if isinstance(node.slice, ast.Slice):
+            n = len(value.dims)
+            lower_val = 0 if node.slice.lower is None else int_from_ast(node.slice.lower)
+            upper_val = n if node.slice.upper is None else int_from_ast(node.slice.upper)
+            if lower_val is None or upper_val is None:
+                return None
+            if lower_val < 0:
+                lower_val += n
+            if upper_val < 0:
+                upper_val += n
+            lower_val = max(0, lower_val)
+            upper_val = min(n, upper_val)
+            return ShapeTupleValue(value.dims[lower_val:upper_val])
+        # Single integer index (e.g. x.shape[0]) → a single Dim.
         index = int_from_ast(node.slice)
         if index is None:
             return None
@@ -55,7 +70,20 @@ def infer_subscript(
         if position >= len(dims):
             return None
         if isinstance(slice_node, ast.Slice):
-            output.append(dims[position])
+            step_is_one = slice_node.step is None or (
+                isinstance(slice_node.step, ast.Constant) and slice_node.step.value == 1
+            )
+            lower_val = 0 if slice_node.lower is None else int_from_ast(slice_node.lower)
+            upper_val = int_from_ast(slice_node.upper) if slice_node.upper is not None else None
+            if (
+                step_is_one
+                and lower_val is not None
+                and upper_val is not None
+                and upper_val > lower_val
+            ):
+                output.append(ConstantDim(upper_val - lower_val))
+            else:
+                output.append(dims[position])
             position += 1
             continue
         if int_from_ast(slice_node) is not None:

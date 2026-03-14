@@ -74,3 +74,25 @@ def tuple_index(value: ShapeTupleValue, index: int) -> Dim | None:
 
 def render_dims(dims: tuple[Dim, ...]) -> str:
     return "[" + ", ".join(render_dim(dim) for dim in dims) + "]"
+
+
+def spatial_output_dim(dim: Dim, kernel: int, stride: int, padding: int, dilation: int) -> Dim:
+    """Apply the convolution / pooling output-size formula to a single spatial dimension.
+
+    Formula: floor((dim + 2*padding - dilation*(kernel-1) - 1) / stride + 1)
+
+    Args:
+        dim: Input spatial dimension.
+        kernel: Kernel size.
+        stride: Stride.
+        padding: Zero-padding on each side.
+        dilation: Dilation factor (use 1 for average pooling).
+
+    Returns:
+        ConstantDim with the computed integer size if dim is constant;
+        ExpressionDim with the formula string otherwise.
+    """
+    if isinstance(dim, ConstantDim):
+        value = ((dim.value + (2 * padding) - (dilation * (kernel - 1)) - 1) // stride) + 1
+        return ConstantDim(value)
+    return ExpressionDim(f"floor(({dim} + 2*{padding} - {dilation}*({kernel}-1) - 1)/{stride} + 1)")
