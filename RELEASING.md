@@ -123,7 +123,7 @@ Expected outputs:
 
 - `dist/torchshapeflow-<version>-py3-none-any.whl`
 - `dist/torchshapeflow-<version>.tar.gz`
-- `extensions/vscode/dist/torch-shape-flow.vsix`
+- `extensions/vscode/dist/torchshapeflow.vsix`
 
 ## Notes
 

@@ -36,6 +36,7 @@ from torchshapeflow.model import (
     TensorValue,
     UnknownDim,
     Value,
+    broadcast_has_uncertain_dims,
     make_dim,
     normalize_index,
 )
@@ -206,6 +207,7 @@ class ModuleContext:
     aliases: dict[str, TensorValue] = field(default_factory=dict)
     func_sigs: dict[str, FuncSig] = field(default_factory=dict)
     return_shape: TensorValue | None = None
+    collected_returns: list[TensorValue | None] = field(default_factory=list)
 
     def error(
         self,
@@ -445,6 +447,7 @@ def _analyze_function(
     module_specs: dict[str, ModuleSpec],
 ) -> None:
     env: dict[str, Value] = {}
+    tensor_params: list[tuple[str, TensorValue]] = []
     for argument in function.args.args:
         if argument.arg == "self":
             continue
@@ -458,8 +461,11 @@ def _analyze_function(
         if tensor is not None:
             env[argument.arg] = tensor
             context.hover(argument.arg, argument, tensor)
+            tensor_params.append((argument.arg, tensor))
     # Parse return annotation; set on context so _analyze_statement can validate.
     old_return_shape = context.return_shape
+    old_collected_returns = context.collected_returns
+    context.collected_returns = []
     if function.returns is not None:
         try:
             context.return_shape = parse_tensor_annotation(function.returns, context.aliases)
@@ -469,7 +475,64 @@ def _analyze_function(
         context.return_shape = None
     for statement in function.body:
         _analyze_statement(statement, env, context, module_specs)
+    # Emit a signature hover on the function name if any tensor params are present.
+    if tensor_params:
+        _emit_signature_hover(
+            function, tensor_params, context.return_shape, context.collected_returns, context
+        )
+    context.collected_returns = old_collected_returns
     context.return_shape = old_return_shape
+
+
+def _emit_signature_hover(
+    function: ast.FunctionDef,
+    tensor_params: list[tuple[str, TensorValue]],
+    declared_return: TensorValue | None,
+    collected_returns: list[TensorValue | None],
+    context: ModuleContext,
+) -> None:
+    # Format parameter block — one per line when there are multiple.
+    if len(tensor_params) == 1:
+        params_str = f"({tensor_params[0][0]}: {tensor_params[0][1].shape})"
+    else:
+        inner = ",\n".join(f"  {name}: {tv.shape}" for name, tv in tensor_params)
+        params_str = f"(\n{inner}\n)"
+
+    # Determine return string — prefer inferred over declared annotation.
+    tensor_returns = [tv for tv in collected_returns if tv is not None]
+    if tensor_returns:
+        unique = list(dict.fromkeys(str(tv.shape) for tv in tensor_returns))
+        if len(unique) == 1:
+            return_str = f" → {unique[0]}"
+        else:
+            cases = "\n".join(
+                f"  - {s}" if tv is not None else "  - ?"
+                for tv, s in zip(
+                    collected_returns,
+                    (str(tv.shape) if tv is not None else "?" for tv in collected_returns),
+                    strict=False,
+                )
+            )
+            return_str = f" →\n{cases}"
+    elif declared_return is not None:
+        return_str = f" → {declared_return.shape}"
+    else:
+        return_str = ""
+
+    sig = params_str + return_str
+    # Emit the hover at the function name token (after "def ").
+    name_col = function.col_offset + 4  # 0-based start of the name
+    name_end_col = name_col + len(function.name)
+    context.hovers.append(
+        HoverFact(
+            line=function.lineno,
+            column=name_col + 1,  # 1-based
+            end_line=function.lineno,
+            end_column=name_end_col + 1,  # 1-based
+            name=function.name,
+            shape=sig,
+        )
+    )
 
 
 def _analyze_statement(
@@ -514,6 +577,7 @@ def _analyze_statement(
         return
     if isinstance(statement, ast.Return) and statement.value is not None:
         actual = _eval_expr(statement.value, env, context, module_specs)
+        context.collected_returns.append(actual if isinstance(actual, TensorValue) else None)
         if isinstance(actual, TensorValue):
             if not isinstance(statement.value, ast.Name):
                 context.hover("<return>", statement.value, actual)
@@ -603,6 +667,14 @@ def _eval_expr(
             result = infer_binary_broadcast(left, right)
             if result is None:
                 context.error(node, "TSF1006", "Broadcasting incompatibility.")
+            elif broadcast_has_uncertain_dims(left.shape, right.shape):
+                context.error(
+                    node,
+                    "TSF1006",
+                    "Broadcasting compatibility cannot be verified statically"
+                    f" ({left.shape} vs {right.shape}).",
+                    severity="warning",
+                )
             return result
         return None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
@@ -1211,6 +1283,12 @@ def _shapes_definitely_mismatch(declared: TensorShape, actual: TensorShape) -> b
         return True
     for d, a in zip(declared.dims, actual.dims, strict=True):
         if isinstance(d, ConstantDim) and isinstance(a, ConstantDim) and d.value != a.value:
+            return True
+        if isinstance(d, SymbolicDim) and isinstance(a, SymbolicDim) and d.name != a.name:
+            return True
+        if isinstance(d, ConstantDim) and isinstance(a, SymbolicDim):
+            return True
+        if isinstance(d, SymbolicDim) and isinstance(a, ConstantDim):
             return True
     return False
 

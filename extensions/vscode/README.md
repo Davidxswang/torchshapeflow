@@ -25,7 +25,7 @@ GitHub Actions can publish this extension conditionally:
 - `VSCE_PAT` enables publishing to the VS Code Marketplace
 - `OVSX_PAT` enables publishing to Open VSX
 
-If those secrets are not configured, release workflows still package `dist/torch-shape-flow.vsix` and attach it to the GitHub release.
+If those secrets are not configured, release workflows still package `dist/torchshapeflow.vsix` and attach it to the GitHub release.
 
 ## Notes
 

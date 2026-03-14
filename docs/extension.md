@@ -30,7 +30,7 @@ Once the extension is published to the VS Code Marketplace, it will be installab
 
 ```bash
 make extension-build     # development build (faster, no .vsix)
-make extension-package   # produces extensions/vscode/dist/torch-shape-flow.vsix
+make extension-package   # produces extensions/vscode/dist/torchshapeflow.vsix
 ```
 
 Requires Node.js ≥ 24 and `npm`.
