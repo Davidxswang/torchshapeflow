@@ -270,29 +270,65 @@ def dims_compatible(left: Dim, right: Dim) -> bool:
     return render_dim(left) == render_dim(right)
 
 
+def _broadcast_dim(left: Dim, right: Dim) -> Dim | None:
+    """Return the output dim for a pair of broadcast-aligned dimensions.
+
+    Returns None only for provably incompatible constant pairs.
+    Symbolic vs. anything non-matching yields an UnknownDim (uncertain).
+    """
+    if isinstance(left, ConstantDim) and left.value == 1:
+        return right
+    if isinstance(right, ConstantDim) and right.value == 1:
+        return left
+    if render_dim(left) == render_dim(right):
+        return left
+    # Definite incompatibility: both constants, neither is 1.
+    if isinstance(left, ConstantDim) and isinstance(right, ConstantDim):
+        return None
+    # Uncertain: at least one symbolic dim — prefer the constant if present.
+    if isinstance(left, ConstantDim):
+        return left
+    if isinstance(right, ConstantDim):
+        return right
+    return UnknownDim("?")
+
+
+def broadcast_has_uncertain_dims(left: TensorShape, right: TensorShape) -> bool:
+    """Return True if any aligned dim pair is uncertain (symbolic vs. non-matching).
+
+    Used by the analyzer to emit a warning instead of an error.
+    """
+    for ldim, rdim in zip(reversed(left.dims), reversed(right.dims), strict=False):
+        if dims_compatible(ldim, rdim):
+            continue
+        if isinstance(ldim, ConstantDim) and isinstance(rdim, ConstantDim):
+            continue  # definite mismatch — handled as error, not warning
+        return True
+    return False
+
+
 def broadcast_shapes(left: TensorShape, right: TensorShape) -> TensorShape | None:
     """Compute the broadcast shape of two tensors following NumPy/PyTorch rules.
 
     Dimensions are aligned from the right; leading batch dims of the larger operand are
     prepended to the result. A size-1 dimension is compatible with any size.
+    Symbolic dimensions that cannot be verified statically are kept as UnknownDim.
 
     Args:
         left: Shape of the left operand.
         right: Shape of the right operand.
 
     Returns:
-        Broadcast TensorShape, or None if any aligned pair of dimensions is incompatible.
+        Broadcast TensorShape, or None only when a pair of constant dims is provably
+        incompatible (both non-1 and unequal).
     """
     out: list[Dim] = []
     # zip stops at the shorter operand; unmatched leading dims are handled below
     for ldim, rdim in zip(reversed(left.dims), reversed(right.dims), strict=False):
-        if dims_compatible(ldim, rdim):
-            if isinstance(ldim, ConstantDim) and ldim.value == 1:
-                out.append(rdim)
-            else:
-                out.append(ldim)
-            continue
-        return None
+        result = _broadcast_dim(ldim, rdim)
+        if result is None:
+            return None
+        out.append(result)
     if left.rank > right.rank:
         out.extend(reversed(left.dims[: left.rank - right.rank]))
     elif right.rank > left.rank:

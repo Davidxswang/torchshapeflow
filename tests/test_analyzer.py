@@ -849,3 +849,25 @@ def fn(x: Annotated[torch.Tensor, Shape("B", "N")], num_classes: int = 10):
     assert any(
         hover.name == "z" and hover.shape == "[num_classes, num_classes]" for hover in report.hovers
     )
+
+
+def test_function_signature_hover() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def attention_scores(
+    q: Annotated[torch.Tensor, Shape("B", "H", "T", "D")],
+    k: Annotated[torch.Tensor, Shape("B", "H", "T", "D")],
+) -> Annotated[torch.Tensor, Shape("B", "H", "T", "T")]:
+    return q.matmul(k.transpose(-2, -1))
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    sig = next(
+        (h for h in report.hovers if h.name == "attention_scores"),
+        None,
+    )
+    assert sig is not None
+    assert sig.shape == "(\n  q: [B, H, T, D],\n  k: [B, H, T, D]\n) → [B, H, T, T]"

@@ -1,9 +1,9 @@
 {
-  "name": "torch-shape-flow",
+  "name": "torchshapeflow",
   "displayName": "Torch Shape Flow",
   "description": "Static PyTorch tensor shape diagnostics and hover information.",
   "version": "0.1.1",
-  "publisher": "torchshapeflow",
+  "publisher": "davidxswang",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,8 +27,7 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:python",
-    "onCommand:torchShapeFlow.runAnalysis"
+    "onLanguage:python"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -57,12 +56,12 @@
   "scripts": {
     "build": "tsc -p ./tsconfig.json",
     "watch": "tsc -w -p ./tsconfig.json",
-    "package": "mkdir -p dist && npm run build && npx @vscode/vsce package -o dist/torch-shape-flow.vsix"
+    "package": "mkdir -p dist && npm run build && npx @vscode/vsce package -o dist/torchshapeflow.vsix"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^25.5.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.6.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   }
 }

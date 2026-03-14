@@ -33,7 +33,10 @@ export class HoverController implements vscode.HoverProvider {
 
     const markdown = new vscode.MarkdownString();
     markdown.appendCodeblock(hoverFact.shape, "text");
-    markdown.appendMarkdown(`\nInferred shape for \`${hoverFact.name}\`.`);
+    const label = hoverFact.shape.startsWith("(")
+      ? `Shape signature for \`${hoverFact.name}\`.`
+      : `Inferred shape for \`${hoverFact.name}\`.`;
+    markdown.appendMarkdown(`\n${label}`);
     return new vscode.Hover(markdown, range);
   }
 
