@@ -29,11 +29,20 @@ def parse_source(source: str, path: str = "<memory>") -> ast.Module:
     return ast.parse(source, filename=path)
 
 
-def parse_tensor_annotation(node: ast.AST) -> TensorValue | None:
-    """Extract a TensorValue from an Annotated[torch.Tensor, Shape(...)] annotation node.
+def parse_tensor_annotation(
+    node: ast.AST,
+    aliases: dict[str, TensorValue] | None = None,
+) -> TensorValue | None:
+    """Extract a TensorValue from an annotation node.
+
+    Handles two forms:
+    - ``Annotated[torch.Tensor, Shape(...)]`` — inline annotation.
+    - A bare ``ast.Name`` that refers to a TypeAlias resolved via *aliases*.
 
     Args:
         node: An AST node that may represent an annotated tensor type.
+        aliases: Optional resolved alias table; if supplied, bare ``Name`` nodes
+            are looked up here before the ``Annotated`` path is tried.
 
     Returns:
         TensorValue carrying the declared shape, or None if the node is not an
@@ -43,6 +52,8 @@ def parse_tensor_annotation(node: ast.AST) -> TensorValue | None:
         AnnotationParseError: If the node looks like an Annotated tensor annotation but is
             malformed (missing Shape metadata, or invalid Shape arguments).
     """
+    if isinstance(node, ast.Name) and aliases is not None:
+        return aliases.get(node.id)
     if not isinstance(node, ast.Subscript):
         return None
     if not _is_annotated(node.value):

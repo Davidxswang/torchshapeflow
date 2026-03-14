@@ -79,13 +79,15 @@ class IntegerValue:
 
 @dataclass(frozen=True)
 class LinearSpec:
-    in_features: int
+    # in_features is None when the constructor arg was non-literal (e.g. from a variable).
+    in_features: int | None
     out_features: int
 
 
 @dataclass(frozen=True)
 class Conv2dSpec:
-    in_channels: int
+    # in_channels is None when the constructor arg was non-literal (e.g. from a config).
+    in_channels: int | None
     out_channels: int
     kernel_size: tuple[int, int]
     stride: tuple[int, int]
@@ -93,7 +95,97 @@ class Conv2dSpec:
     dilation: tuple[int, int]
 
 
-Value: TypeAlias = TensorValue | ShapeTupleValue | IntegerValue | LinearSpec | Conv2dSpec
+@dataclass(frozen=True)
+class PassthroughSpec:
+    """Marker for shape-preserving nn.Module instances (BatchNorm, LayerNorm, ReLU, etc.).
+
+    The output shape equals the input shape; no validation is performed.
+    """
+
+
+@dataclass(frozen=True)
+class EmbeddingSpec:
+    """Spec for nn.Embedding — appends embedding_dim to the index tensor shape."""
+
+    embedding_dim: int
+
+
+@dataclass(frozen=True)
+class Pool2dSpec:
+    """Spec for nn.MaxPool2d and nn.AvgPool2d — preserves (N, C), transforms (H, W).
+
+    stride defaults to kernel_size in PyTorch when not explicitly provided.
+    dilation is always (1, 1) for nn.AvgPool2d (that layer has no dilation parameter).
+    """
+
+    kernel_size: tuple[int, int]
+    stride: tuple[int, int]
+    padding: tuple[int, int]
+    dilation: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class MultiheadAttentionSpec:
+    """Spec for nn.MultiheadAttention.
+
+    When called with ``(query, key, value)``, output is a ``TensorTupleValue``
+    where the first element has the same shape as ``query`` and the second element
+    is the attention weights (shape unknown statically).
+    """
+
+    embed_dim: int
+    num_heads: int
+    batch_first: bool
+
+
+@dataclass(frozen=True)
+class SequentialSpec:
+    """Spec for nn.Sequential — applies a chain of sub-module specs in order."""
+
+    specs: tuple[
+        LinearSpec
+        | Conv2dSpec
+        | PassthroughSpec
+        | EmbeddingSpec
+        | Pool2dSpec
+        | MultiheadAttentionSpec
+        | SequentialSpec,
+        ...,
+    ]
+
+
+# Convenience alias for any module spec type.
+ModuleSpec: TypeAlias = (
+    LinearSpec
+    | Conv2dSpec
+    | PassthroughSpec
+    | EmbeddingSpec
+    | Pool2dSpec
+    | MultiheadAttentionSpec
+    | SequentialSpec
+)
+
+
+@dataclass(frozen=True)
+class TensorTupleValue:
+    """A statically-known fixed-length tuple of tensors, e.g. from x.chunk() or x.split()."""
+
+    tensors: tuple[TensorValue, ...]
+
+
+Value: TypeAlias = (
+    TensorValue
+    | ShapeTupleValue
+    | IntegerValue
+    | LinearSpec
+    | Conv2dSpec
+    | PassthroughSpec
+    | EmbeddingSpec
+    | Pool2dSpec
+    | MultiheadAttentionSpec
+    | SequentialSpec
+    | TensorTupleValue
+)
 
 
 def render_dim(dim: Dim) -> str:

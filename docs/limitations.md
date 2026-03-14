@@ -16,7 +16,6 @@ The following are not handled:
 - Decorators
 - `*args` / `**kwargs` unpacking
 - `getattr` and dynamic attribute access
-- Augmented assignment (`x += y`)
 
 ## Only listed operators produce inferred shapes
 
@@ -26,18 +25,14 @@ Unsupported calls produce no diagnostic — the result is silently dropped from 
 
 TorchShapeFlow is shape-only by design. `DType`, `Device`, `Layout`, and distributed tensor semantics are out of scope.
 
-## Single-file analysis only
-
-Each file is analyzed independently. Imported functions and classes defined in other files are not resolved. If `forward` calls a helper defined in another module, that helper's output has no tracked shape.
-
 ## Known analyzer limitations
 
-- **Module aliases are not tracked.** Only direct `self.attr` access is resolved. `m = self.linear; m(x)` is not supported — `m` has no tracked shape spec.
-- **Symbolic last dim in `nn.Linear`.** `in_features` matching requires a `ConstantDim`. A symbolic last dim (e.g. `"D"`) will not match against `in_features=768` even if semantically intended.
-- **Symbolic channel dim in `nn.Conv2d`.** The channel dimension must be a `ConstantDim` equal to `in_channels`.
+- **Cross-file resolution is project-relative only.** Imports are resolved relative to the importing file's directory. Third-party packages (e.g. `from torch.nn import Linear`) are not indexed — only project-local `.py` files.
+- **Non-literal `out_channels` / `out_features` drops the spec entirely.** If the output-size constructor arg is non-literal (e.g. `nn.Linear(512, cfg.hidden)`), the spec cannot be collected and no shape is inferred. Non-literal *input*-size args (`in_channels`, `in_features`) are tolerated — the input-dim check is skipped and the output shape is still propagated.
+- **Symbolic input dim skips validation but still propagates output.** `Shape("B", "C", "H", "W")` through `nn.Conv2d(3, 64, 3)` will not verify `C == 3`, but the output `[B, 64, H_out, W_out]` is still inferred. Likewise for `nn.Linear`.
 - **No symbolic unification.** `"B"` in one annotation and `"B"` in another are independent — there is no constraint propagation across call sites.
 - **The `-1` reshape dim is not validated for mixed shapes.** The inferred dimension is computed as a quotient expression, but product consistency is only checked when all input and requested dims are constant.
-- **Slice sizes are not tracked.** `x[1:5]` keeps the dimension but does not infer its size as `4`. The size remains whatever it was before indexing.
+- **Open-ended slice sizes are not tracked.** `x[1:]` and `x[:n]` (where `n` is a variable) keep the dimension unchanged. Only slices with two explicit constant integer bounds (e.g. `x[1:5]` → 4) are tracked.
 
 ## Explicit non-goals for the MVP
 

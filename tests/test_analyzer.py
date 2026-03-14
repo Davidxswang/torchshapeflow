@@ -83,3 +83,770 @@ def attention_scores(
     report = analyze_source(source, Path("memory.py"))
     assert report.diagnostics == []
     assert any(hover.name == "scores" and hover.shape == "[B, H, T, T]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# split / chunk
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_tuple_unpack() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 192)]):
+    q, k, v = x.chunk(3, dim=-1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "q" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "k" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "v" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+def test_chunk_keyword_dim() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 256)]):
+    a, b = x.chunk(2, dim=-1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "a" and hover.shape == "[B, 128]" for hover in report.hovers)
+    assert any(hover.name == "b" and hover.shape == "[B, 128]" for hover in report.hovers)
+
+
+def test_split_int_size_unpack() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 192)]):
+    q, k, v = x.split(64, dim=-1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "q" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "k" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "v" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+def test_split_list_sizes_unpack() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 10)]):
+    a, b = x.split([3, 7], dim=-1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "a" and hover.shape == "[B, T, 3]" for hover in report.hovers)
+    assert any(hover.name == "b" and hover.shape == "[B, T, 7]" for hover in report.hovers)
+
+
+def test_chunk_stored_in_env_subscript() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 128)]):
+    chunks = x.chunk(2, dim=-1)
+    first = chunks[0]
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "first" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+def test_torch_split_function() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 192)]):
+    q, k, v = torch.split(x, 64, dim=-1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "q" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "v" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+def test_transformer_qkv_split() -> None:
+    """Single-projection QKV split pattern common in efficient transformers."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Attention(nn.Module):
+    def __init__(self):
+        self.qkv = nn.Linear(64, 192)
+        self.out = nn.Linear(64, 64)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        kt = k.transpose(-2, -1)
+        scores = q @ kt
+        attn = torch.softmax(scores.float(), dim=-1).half()
+        out = attn @ v
+        return self.out(out)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "q" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "scores" and hover.shape == "[B, T, T]" for hover in report.hovers)
+    assert any(hover.name == "out" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# PassthroughSpec: BatchNorm2d, ReLU
+# ---------------------------------------------------------------------------
+
+
+def test_passthrough_batchnorm2d() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Net(nn.Module):
+    def __init__(self):
+        self.bn = nn.BatchNorm2d(8)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", 8, 32, 32)]):
+        return self.bn(x)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    # The return value should have the same shape as x.
+    assert any(hover.shape == "[B, 8, 32, 32]" for hover in report.hovers)
+
+
+def test_passthrough_relu() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Net(nn.Module):
+    def __init__(self):
+        self.act = nn.ReLU()
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "C", 16, 16)]):
+        y = self.act(x)
+        return y
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, 16, 16]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# EmbeddingSpec
+# ---------------------------------------------------------------------------
+
+
+def test_embedding_shape() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.embed = nn.Embedding(1000, 64)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T")]):
+        return self.embed(x)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    # embedding appends 64 to (B, T) → (B, T, 64)
+    assert any(hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# Pool2dSpec: MaxPool2d, AvgPool2d
+# ---------------------------------------------------------------------------
+
+
+def test_maxpool2d_shape() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Net(nn.Module):
+    def __init__(self):
+        self.pool = nn.MaxPool2d(2)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "C", 8, 8)]):
+        y = self.pool(x)
+        return y
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, 4, 4]" for hover in report.hovers)
+
+
+def test_avgpool2d_shape() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Net(nn.Module):
+    def __init__(self):
+        self.pool = nn.AvgPool2d(4, stride=2)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "C", 16, 16)]):
+        y = self.pool(x)
+        return y
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    # H_out = floor((16 + 0 - 4) / 2 + 1) = floor(12/2 + 1) = 7
+    assert any(hover.name == "y" and hover.shape == "[B, C, 7, 7]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# TSF1009: return shape mismatch
+# ---------------------------------------------------------------------------
+
+
+def test_return_shape_rank_mismatch_tsf1009() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]) -> Annotated[torch.Tensor, Shape("B", 64)]:
+    return x
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert any(d.code == "TSF1009" for d in report.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Reduction: torch.sum(x, dim=1)
+# ---------------------------------------------------------------------------
+
+
+def test_reduction_global_torch_sum() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    y = torch.sum(x, dim=1)
+    return y
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 64]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# Module alias: m = self.linear; m(x)
+# ---------------------------------------------------------------------------
+
+
+def test_module_alias_linear() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Net(nn.Module):
+    def __init__(self):
+        self.linear = nn.Linear(64, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        m = self.linear
+        y = m(x)
+        return y
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, T, 32]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# Augmented assignment (+=, -=, etc.)
+# ---------------------------------------------------------------------------
+
+
+def test_augmented_assignment_residual() -> None:
+    """x += y should update x's shape via broadcast (residual connection pattern)."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)],
+       r: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    x += r
+    y = x.transpose(1, 2)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 64, T]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# movedim / mm
+# ---------------------------------------------------------------------------
+
+
+def test_movedim_tensor_method() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")]):
+    y = x.movedim(1, -1)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    # axis 1 (C) moved to last position → (B, H, W, C)
+    assert any(hover.name == "y" and hover.shape == "[B, H, W, C]" for hover in report.hovers)
+
+
+def test_torch_mm() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(4, 8)],
+       y: Annotated[torch.Tensor, Shape(8, 16)]):
+    z = torch.mm(x, y)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "z" and hover.shape == "[4, 16]" for hover in report.hovers)
+
+
+def test_torch_mm_incompatible_tsf1003() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(4, 8)],
+       y: Annotated[torch.Tensor, Shape(9, 16)]):
+    z = torch.mm(x, y)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    assert any(d.code == "TSF1003" for d in report.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# nn.Sequential
+# ---------------------------------------------------------------------------
+
+
+def test_sequential_basic() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.net = nn.Sequential(nn.Linear(64, 32), nn.ReLU())
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("seq.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, T, 32]" for hover in report.hovers)
+
+
+def test_sequential_multi_layer() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.net = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 16),
+        )
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", 128)]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("seq.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 16]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# torch.einsum
+# ---------------------------------------------------------------------------
+
+
+def test_torch_einsum_bmm() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(q: Annotated[torch.Tensor, Shape("B", "T", "D")],
+       k: Annotated[torch.Tensor, Shape("B", "D", "T")]):
+    out = torch.einsum("bik,bkj->bij", q, k)
+"""
+    report = analyze_source(source, Path("ein.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "out" and hover.shape == "[B, T, T]" for hover in report.hovers)
+
+
+def test_torch_einsum_matrix_vector() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(A: Annotated[torch.Tensor, Shape(4, 8)],
+       v: Annotated[torch.Tensor, Shape(8)]):
+    out = torch.einsum("ij,j->i", A, v)
+"""
+    report = analyze_source(source, Path("ein.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "out" and hover.shape == "[4]" for hover in report.hovers)
+
+
+def test_torch_einsum_list_form() -> None:
+    # torch.einsum("ij,jk->ik", [A, B])
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(A: Annotated[torch.Tensor, Shape("M", "K")],
+       B: Annotated[torch.Tensor, Shape("K", "N")]):
+    out = torch.einsum("ij,jk->ik", [A, B])
+"""
+    report = analyze_source(source, Path("ein.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "out" and hover.shape == "[M, N]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# nn.MultiheadAttention
+# ---------------------------------------------------------------------------
+
+
+def test_multihead_attention_output_shape() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.attn = nn.MultiheadAttention(64, 8, batch_first=True)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        out, _ = self.attn(x, x, x)
+"""
+    report = analyze_source(source, Path("mha.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "out" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+
+
+def test_multihead_attention_chained() -> None:
+    """Output of MHA fed into a Linear layer."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.attn = nn.MultiheadAttention(64, 8, batch_first=True)
+        self.proj = nn.Linear(64, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        out, _ = self.attn(x, x, x)
+        y = self.proj(out)
+"""
+    report = analyze_source(source, Path("mha.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, T, 32]" for hover in report.hovers)
+
+
+def test_tensor_method_mm() -> None:
+    """x.mm(y) tensor method form should work like torch.mm."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(4, 8)],
+       y: Annotated[torch.Tensor, Shape(8, 16)]):
+    z = x.mm(y)
+"""
+    report = analyze_source(source, Path("mm.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "z" and hover.shape == "[4, 16]" for hover in report.hovers)
+
+
+def test_einsum_dim_mismatch_emits_tsf1003() -> None:
+    """einsum with mismatched contraction dims should emit TSF1003."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(q: Annotated[torch.Tensor, Shape("B", "T", 8)],
+       k: Annotated[torch.Tensor, Shape("B", 9, "T")]):
+    out = torch.einsum("bik,bkj->bij", q, k)
+"""
+    report = analyze_source(source, Path("ein.py"))
+    assert any(d.code == "TSF1003" for d in report.diagnostics)
+
+
+def test_f_interpolate_size_tuple() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn.functional as F
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", 32, 32)]):
+    y = F.interpolate(x, size=(64, 64), mode="bilinear")
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, 64, 64]" for hover in report.hovers)
+
+
+def test_f_interpolate_size_variable() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn.functional as F
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", 16, 16)],
+       labels: Annotated[torch.Tensor, Shape("B", 32, 32)]):
+    y = F.interpolate(x, size=labels.shape[-2:], mode="bilinear")
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, 32, 32]" for hover in report.hovers)
+
+
+def test_f_interpolate_scale_factor() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn.functional as F
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", 16, 16)]):
+    y = F.interpolate(x, scale_factor=2.0)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, 32, 32]" for hover in report.hovers)
+
+
+def test_argmax_reduction() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 64, "H", "W")]):
+    y = x.argmax(dim=1)
+    z = torch.argmax(x, dim=1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, H, W]" for hover in report.hovers)
+    assert any(hover.name == "z" and hover.shape == "[B, H, W]" for hover in report.hovers)
+
+
+def test_nanmean_reduction() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    y = torch.nanmean(x, dim=-1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, T]" for hover in report.hovers)
+
+
+def test_torch_flip() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")]):
+    y = torch.flip(x, dims=[3])
+    z = x.flip(dims=[2, 3])
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, C, H, W]" for hover in report.hovers)
+    assert any(hover.name == "z" and hover.shape == "[B, C, H, W]" for hover in report.hovers)
+
+
+def test_f_one_hot() -> None:
+    source = """
+from typing import Annotated
+import torch
+import torch.nn.functional as F
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "H", "W")]):
+    y = F.one_hot(x, num_classes=64)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, H, W, 64]" for hover in report.hovers)
+
+
+def test_torch_topk() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 256)]):
+    top = torch.topk(x, k=10, dim=-1).values
+    y = top.mean(dim=-1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B]" for hover in report.hovers)
+
+
+def test_diagonal() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 64, 64)]):
+    y = x.diagonal(dim1=-2, dim2=-1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 64]" for hover in report.hovers)
+
+
+def test_index_select() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 64, "H")],
+       idx: Annotated[torch.Tensor, Shape(10)]):
+    y = x.index_select(1, idx)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 10, H]" for hover in report.hovers)
+
+
+def test_torch_isfinite_passthrough() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T")]):
+    y = torch.isfinite(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, T]" for hover in report.hovers)
+
+
+def test_bincount_unknown_shape() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(100)]):
+    y = torch.bincount(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[?]" for hover in report.hovers)
+
+
+def test_reshape_with_runtime_int_parameter() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")], num_classes: int = 64):
+    flat = x.reshape(-1)
+    out = flat.reshape(num_classes, num_classes)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(
+        hover.name == "out" and hover.shape == "[num_classes, num_classes]"
+        for hover in report.hovers
+    )
+
+
+def test_reshape_with_batch_and_runtime_dim() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "N")], num_classes: int = 10):
+    y = torch.bincount(x.reshape(-1), minlength=num_classes * num_classes)
+    z = y.reshape(num_classes, num_classes)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(
+        hover.name == "z" and hover.shape == "[num_classes, num_classes]"
+        for hover in report.hovers
+    )

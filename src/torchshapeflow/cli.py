@@ -8,6 +8,7 @@ import typer
 
 from torchshapeflow._version import __version__
 from torchshapeflow.analyzer import analyze_path
+from torchshapeflow.index import ProjectIndex
 from torchshapeflow.report import FileReport
 from torchshapeflow.utils.paths import collect_python_files
 
@@ -19,7 +20,8 @@ def check(
     path: Path,
     json_output: bool = typer.Option(False, "--json", help="Emit JSON output."),
 ) -> None:
-    reports = [analyze_path(file_path) for file_path in collect_python_files(path)]
+    project_index = ProjectIndex()
+    reports = [analyze_path(file_path, project_index) for file_path in collect_python_files(path)]
     payload = {"files": [report.to_dict() for report in reports]}
     if json_output:
         typer.echo(json.dumps(payload, indent=2))
