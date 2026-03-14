@@ -35,11 +35,11 @@ broken.py:9:9 error TSF1004 Invalid reshape.
 
 ## Getting started
 
-→ [Quickstart](quickstart.md) — install and run your first check
-→ [Annotation syntax](syntax.md) — how to annotate your tensors
-→ [Supported operators](operators.md) — what is analyzed and what shapes are inferred
+- [Quickstart](quickstart.md) — install and run your first check
+- [Annotation syntax](syntax.md) — how to annotate your tensors
+- [Supported operators](operators.md) — what is analyzed and what shapes are inferred
 
 ## For contributors
 
-→ [Architecture](architecture.md) — module map, analysis pipeline, Dim type system
-→ [Development](development.md) — make targets, CI, how to add a new operator
+- [Architecture](architecture.md) — module map, analysis pipeline, Dim type system
+- [Development](development.md) — make targets, CI, how to add a new operator
