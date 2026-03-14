@@ -2,7 +2,7 @@
   "name": "torchshapeflow",
   "displayName": "Torch Shape Flow",
   "description": "Static PyTorch tensor shape diagnostics and hover information.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "davidxswang",
   "license": "MIT",
   "repository": {
