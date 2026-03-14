@@ -52,7 +52,7 @@ All workflows live in `.github/workflows/`.
 Two jobs run in parallel:
 
 - **`check`** (runs once on Python 3.12): format check, lint, type-check, docs build, VS Code extension build.
-- **`test`** (matrix: Python 3.10, 3.11, 3.12, 3.13): `pytest -q`.
+- **`test`** (matrix: Python 3.10, 3.11, 3.12, 3.13, 3.14): `pytest -q`.
 
 ### `docs.yml` — push to `main` and manual trigger
 
