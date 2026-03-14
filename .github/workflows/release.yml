@@ -58,38 +58,32 @@ jobs:
     needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: "npm"
-          cache-dependency-path: extensions/vscode/package-lock.json
-      - working-directory: extensions/vscode
-        run: npm ci
-      - working-directory: extensions/vscode
-        env:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vscode-extension
+          path: vsix
+      - env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx @vscode/vsce publish -p "$VSCE_PAT"
+        run: npx @vscode/vsce publish -p "$VSCE_PAT" --packagePath vsix/torchshapeflow.vsix
 
   publish-open-vsx:
     if: needs.check-secrets.outputs.has-ovsx-pat == 'true' && !contains(github.ref, '-rc') && !contains(github.ref, '-test')
     needs: [check-secrets, build-extension]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: "npm"
-          cache-dependency-path: extensions/vscode/package-lock.json
-      - working-directory: extensions/vscode
-        run: npm ci
-      - working-directory: extensions/vscode
-        run: npm run package
-      - working-directory: extensions/vscode
-        env:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vscode-extension
+          path: vsix
+      - env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: npx ovsx publish dist/torchshapeflow.vsix -p "$OVSX_PAT"
+        run: npx ovsx publish vsix/torchshapeflow.vsix -p "$OVSX_PAT"
 
   publish-testpypi:
     if: contains(github.ref, '-rc') || contains(github.ref, '-test')
