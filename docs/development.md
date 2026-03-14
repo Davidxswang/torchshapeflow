@@ -73,7 +73,7 @@ Builds and uploads two artifacts:
 4. Optionally publishes to Open VSX if `OVSX_PAT` secret is set
 5. Creates a GitHub Release with all artifacts attached
 
-See `RELEASING.md` in the repository root for the full release procedure including version bump steps.
+See [Releasing](releasing.md) for the full release procedure including version bump steps.
 
 ## Adding a new operator
 

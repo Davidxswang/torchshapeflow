@@ -1,8 +1,8 @@
 # TorchShapeFlow
 
 [![CI](https://github.com/Davidxswang/torchshapeflow/actions/workflows/ci.yml/badge.svg)](https://github.com/Davidxswang/torchshapeflow/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/torchshapeflow)](https://pypi.org/project/torchshapeflow/)
-[![Python](https://img.shields.io/pypi/pyversions/torchshapeflow)](https://pypi.org/project/torchshapeflow/)
+[![PyPI](https://img.shields.io/pypi/v/torchshapeflow?logo=pypi)](https://pypi.org/project/torchshapeflow/)
+[![Python](https://img.shields.io/pypi/pyversions/torchshapeflow?logo=python)](https://pypi.org/project/torchshapeflow/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 TorchShapeFlow is a static, AST-based shape analyzer for PyTorch. It reads your Python source — no execution required — infers tensor shapes through your code, and reports mismatches as structured diagnostics.
@@ -57,7 +57,7 @@ See [docs/development.md](docs/development.md) for the full development guide: a
 
 ## Release
 
-See [RELEASING.md](RELEASING.md) for the full release procedure.
+See [docs/releasing.md](docs/releasing.md) for the full release procedure.
 
 Build commands:
 

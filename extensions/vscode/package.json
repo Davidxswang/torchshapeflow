@@ -4,6 +4,7 @@
   "description": "Static PyTorch tensor shape diagnostics and hover information.",
   "version": "0.2.2",
   "publisher": "davidxswang",
+  "icon": "torchshapeflow.png",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -17,7 +18,8 @@
     "out/**",
     "package.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "torchshapeflow.png"
   ],
   "engines": {
     "vscode": "^1.90.0"
