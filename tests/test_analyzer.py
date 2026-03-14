@@ -847,6 +847,5 @@ def fn(x: Annotated[torch.Tensor, Shape("B", "N")], num_classes: int = 10):
     report = analyze_source(source, Path("f.py"))
     assert report.diagnostics == []
     assert any(
-        hover.name == "z" and hover.shape == "[num_classes, num_classes]"
-        for hover in report.hovers
+        hover.name == "z" and hover.shape == "[num_classes, num_classes]" for hover in report.hovers
     )
