@@ -80,6 +80,7 @@ Spec values are stored in `module_specs` (keyed by attribute name) when their co
 | `TSF1007` | error | `nn.Linear`, `nn.Conv2d`, or `nn.MaxPool2d`/`AvgPool2d` input shape mismatch |
 | `TSF1008` | error | Invalid `permute`, `transpose`, `squeeze`, or `unsqueeze` dimensions |
 | `TSF1009` | error | Return shape does not match the declared return type annotation |
+| `TSF1010` | error | Symbolic dim bound to conflicting values across call-site arguments |
 
 ## Adding a new operator
 

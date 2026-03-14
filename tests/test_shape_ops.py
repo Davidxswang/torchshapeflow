@@ -128,6 +128,26 @@ def test_reshape_all_symbolic_no_minus_one() -> None:
     assert str(result.shape) == "[B, C]"
 
 
+def test_reshape_symbolic_cancel_minus_one() -> None:
+    # [B, 3, 4] → [B, 6, -1]: B cancels, 12/6 = 2.
+    result = infer_reshape(_t("B", 3, 4), (SymbolicDim("B"), 6, -1))
+    assert result is not None
+    assert str(result.shape) == "[B, 6, 2]"
+
+
+def test_reshape_symbolic_cancel_multiple() -> None:
+    # [B, C, 3, 4] → [B, C, -1]: B,C cancel, 12/1 = 12.
+    result = infer_reshape(_t("B", "C", 3, 4), (SymbolicDim("B"), SymbolicDim("C"), -1))
+    assert result is not None
+    assert str(result.shape) == "[B, C, 12]"
+
+
+def test_reshape_symbolic_cancel_invalid() -> None:
+    # [B, 3, 4] → [B, 5, -1]: B cancels, 12/5 not divisible → None.
+    result = infer_reshape(_t("B", 3, 4), (SymbolicDim("B"), 5, -1))
+    assert result is None
+
+
 # ---------------------------------------------------------------------------
 # infer_flatten
 # ---------------------------------------------------------------------------
