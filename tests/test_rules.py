@@ -153,12 +153,68 @@ def test_subscript_slice_constant_computes_size() -> None:
     assert str(result.shape) == "[2, C]"
 
 
-def test_subscript_slice_no_upper_keeps_dim() -> None:
-    # x[1:] on [B, C]: upper is unknown, so dim is preserved.
+def test_subscript_slice_no_upper_symbolic_keeps_dim() -> None:
+    # x[1:] on [B, C]: first dim is symbolic, so cannot compute — preserved.
     result = infer_subscript(_t("B", "C"), _subscript_node("x[1:]"))
     assert result is not None
     assert isinstance(result, TensorValue)
     assert str(result.shape) == "[B, C]"
+
+
+def test_subscript_slice_no_upper_constant_computes() -> None:
+    # x[1:] on [32, C]: first dim is constant 32, so 32-1=31.
+    result = infer_subscript(_t(32, "C"), _subscript_node("x[1:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[31, C]"
+
+
+def test_subscript_slice_negative_lower_constant() -> None:
+    # x[-2:] on [10, C]: 10 - (10-2) = 2.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-2:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[2, C]"
+
+
+def test_subscript_slice_negative_upper_constant() -> None:
+    # x[:-1] on [10, C]: upper resolves to 10-1=9, lower is 0 → 9.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[:-1]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[9, C]"
+
+
+def test_subscript_slice_negative_both_constant() -> None:
+    # x[-3:-1] on [10, C]: lower=10-3=7, upper=10-1=9 → 2.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-3:-1]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[2, C]"
+
+
+def test_subscript_slice_negative_lower_out_of_range_clamps() -> None:
+    # x[-100:] on [10, C]: -100 clamps to 0, so 10-0=10.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-100:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[10, C]"
+
+
+def test_subscript_slice_negative_upper_out_of_range_clamps() -> None:
+    # x[:-100] on [10, C]: -100 clamps to 0, upper=0 not > lower=0 → preserved.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[:-100]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[10, C]"
+
+
+def test_subscript_slice_positive_upper_clamps_to_dim() -> None:
+    # x[:100] on [10, C]: upper clamps to 10, lower is 0 → 10.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[:100]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[10, C]"
 
 
 def test_subscript_none_inserts_dim() -> None:

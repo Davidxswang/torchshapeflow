@@ -75,14 +75,41 @@ def test_quotient_dim_exact_division() -> None:
     assert quotient_dim((ConstantDim(12),), (ConstantDim(4),)) == ConstantDim(3)
 
 
-def test_quotient_dim_non_divisible_is_expression() -> None:
+def test_quotient_dim_non_divisible_is_none() -> None:
     result = quotient_dim((ConstantDim(10),), (ConstantDim(3),))
-    assert isinstance(result, ExpressionDim)
+    assert result is None
 
 
 def test_quotient_dim_symbolic_is_expression() -> None:
     result = quotient_dim((SymbolicDim("B"), ConstantDim(4)), (ConstantDim(2),))
     assert isinstance(result, ExpressionDim)
+
+
+def test_quotient_dim_symbolic_cancel_to_constant() -> None:
+    # (B * 3 * 4) / (B * 6) → B cancels, 12 / 6 = 2
+    result = quotient_dim(
+        (SymbolicDim("B"), ConstantDim(3), ConstantDim(4)),
+        (SymbolicDim("B"), ConstantDim(6)),
+    )
+    assert result == ConstantDim(2)
+
+
+def test_quotient_dim_symbolic_cancel_multiple() -> None:
+    # (B * C * 12) / (B * C * 4) → B,C cancel, 12 / 4 = 3
+    result = quotient_dim(
+        (SymbolicDim("B"), SymbolicDim("C"), ConstantDim(12)),
+        (SymbolicDim("B"), SymbolicDim("C"), ConstantDim(4)),
+    )
+    assert result == ConstantDim(3)
+
+
+def test_quotient_dim_symbolic_cancel_invalid() -> None:
+    # (B * 3 * 4) / (B * 5) → B cancels, 12 / 5 not divisible → None
+    result = quotient_dim(
+        (SymbolicDim("B"), ConstantDim(3), ConstantDim(4)),
+        (SymbolicDim("B"), ConstantDim(5)),
+    )
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

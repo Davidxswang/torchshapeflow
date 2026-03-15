@@ -228,26 +228,42 @@ def product_dim(dims: tuple[Dim, ...]) -> Dim:
     return ExpressionDim("*".join(symbolic_parts))
 
 
-def quotient_dim(numerator: tuple[Dim, ...], denominator: tuple[Dim, ...]) -> Dim:
+def quotient_dim(numerator: tuple[Dim, ...], denominator: tuple[Dim, ...]) -> Dim | None:
     """Compute the quotient of two dimension-products.
 
-    Used to infer the -1 dimension in a reshape. Returns a ConstantDim when both
-    sequences are fully constant and the division is exact; otherwise returns an
-    ExpressionDim with the formula as a string.
+    Used to infer the -1 dimension in a reshape. Cancels matching symbolic factors
+    before computing the numeric quotient. Returns a ConstantDim when the result is
+    a whole number after cancellation; an ExpressionDim when symbolic factors remain;
+    or None when the constant remainder does not divide evenly (shape error).
 
     Args:
         numerator: Dimensions whose product forms the numerator.
         denominator: Dimensions whose product forms the denominator.
 
     Returns:
-        ConstantDim if the result is a whole number, ExpressionDim otherwise.
+        ConstantDim if the result is a whole number, ExpressionDim if symbolic factors
+        remain, or None if the constant remainder is not evenly divisible (invalid reshape).
     """
-    if all(isinstance(dim, ConstantDim) for dim in numerator + denominator):
-        num = prod(dim.value for dim in numerator if isinstance(dim, ConstantDim))
-        den = prod(dim.value for dim in denominator if isinstance(dim, ConstantDim))
+    # Cancel matching symbolic/expression factors by string comparison.
+    # Note: "B*C" and "C*B" are treated as different (structural, not algebraic).
+    num_list = list(numerator)
+    den_list = list(denominator)
+    for dim in list(den_list):
+        for i, num_dim in enumerate(num_list):
+            if render_dim(dim) == render_dim(num_dim):
+                num_list.pop(i)
+                den_list.remove(dim)
+                break
+    # After cancellation, check if all remaining are constant
+    if all(isinstance(d, ConstantDim) for d in num_list + den_list):
+        num = prod(d.value for d in num_list if isinstance(d, ConstantDim)) if num_list else 1
+        den = prod(d.value for d in den_list if isinstance(d, ConstantDim)) if den_list else 1
         if den != 0 and num % den == 0:
             return ConstantDim(num // den)
-    return ExpressionDim(f"({shape_product_repr(numerator)})/({shape_product_repr(denominator)})")
+        return None
+    return ExpressionDim(
+        f"({shape_product_repr(tuple(num_list))})/({shape_product_repr(tuple(den_list))})"
+    )
 
 
 def shape_product_repr(dims: tuple[Dim, ...]) -> str:

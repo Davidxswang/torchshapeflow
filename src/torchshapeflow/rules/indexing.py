@@ -75,6 +75,18 @@ def infer_subscript(
             )
             lower_val = 0 if slice_node.lower is None else int_from_ast(slice_node.lower)
             upper_val = int_from_ast(slice_node.upper) if slice_node.upper is not None else None
+            current_dim = dims[position]
+            # Resolve open-ended upper bound when dim is constant
+            if upper_val is None and isinstance(current_dim, ConstantDim):
+                upper_val = current_dim.value
+            # Resolve negative lower/upper bounds when dim is constant (clamp to valid range)
+            if lower_val is not None and lower_val < 0 and isinstance(current_dim, ConstantDim):
+                lower_val = max(0, current_dim.value + lower_val)
+            if upper_val is not None and upper_val < 0 and isinstance(current_dim, ConstantDim):
+                upper_val = max(0, current_dim.value + upper_val)
+            # Clamp positive upper bound to dim size (Python slice semantics)
+            if upper_val is not None and isinstance(current_dim, ConstantDim):
+                upper_val = min(upper_val, current_dim.value)
             if (
                 step_is_one
                 and lower_val is not None
