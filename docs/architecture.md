@@ -2,13 +2,16 @@
 
 ## Analysis pipeline
 
-TorchShapeFlow analyzes Python source in a single pass per file:
+TorchShapeFlow analyzes a target file in one statement-by-statement walk, with
+optional project-local indexing to resolve imported aliases and annotated helper
+signatures:
 
 1. **Parse** — `ast.parse` converts source text into an AST module (`parser.parse_source`).
-2. **Collect module specs** — `_collect_class_specs` walks class `__init__` bodies to find `nn.Linear`, `nn.Conv2d`, `nn.Embedding`, `nn.MaxPool2d`, `nn.AvgPool2d`, `nn.Sequential`, `nn.MultiheadAttention`, and passthrough module assignments, recording their constructor arguments as spec values.
-3. **Seed shape environment** — for each function (or `forward` method), annotated parameters are parsed via `parser.parse_tensor_annotation` and added to the environment `env: dict[str, Value]`.
-4. **Propagate shapes** — `_analyze_statement` walks the function body statement by statement. For each assignment, `_eval_expr` evaluates the right-hand side, dispatching to the appropriate rule function. Results are stored back into `env`.
-5. **Emit results** — diagnostics and hover facts accumulate in a `ModuleContext` and are returned as a `FileReport`.
+2. **Resolve aliases and function signatures** — module-level type aliases are collected from `X = Annotated[...]`, `X: TypeAlias = Annotated[...]`, and, on Python 3.12+ runtimes, `type X = Annotated[...]`. If a `ProjectIndex` is present, project-local `from ... import ...` references are resolved first so imported aliases and annotated helper signatures can be used during analysis.
+3. **Collect module specs** — `_collect_class_specs` walks class `__init__` bodies to find `nn.Linear`, `nn.Conv2d`, `nn.Embedding`, `nn.MaxPool2d`, `nn.AvgPool2d`, `nn.Sequential`, `nn.MultiheadAttention`, and passthrough module assignments, recording their constructor arguments as spec values.
+4. **Seed shape environment** — for each function (or `forward` method), annotated parameters are parsed via `parser.parse_tensor_annotation` and added to the environment `env: dict[str, Value]`.
+5. **Propagate shapes** — `_analyze_statement` walks the function body statement by statement. For each assignment, `_eval_expr` evaluates the right-hand side, dispatching to the appropriate rule function. Results are stored back into `env`.
+6. **Emit results** — diagnostics and hover facts accumulate in a `ModuleContext` and are returned as a `FileReport`.
 
 ## Module map
 
@@ -18,11 +21,12 @@ TorchShapeFlow analyzes Python source in a single pass per file:
 | `annotations.py` | Public `Shape` class used in `Annotated[Tensor, Shape(...)]`. |
 | `parser.py` | Parses `Annotated[Tensor, Shape(...)]` annotation AST nodes into `TensorValue`. Raises `AnnotationParseError` on malformed annotations. |
 | `analyzer.py` | Main AST walker. Manages the shape environment, dispatches to rule functions, emits diagnostics via `ModuleContext`. |
+| `index.py` | Project-local alias and annotated-function indexing (`ProjectIndex`, `FuncSig`, symbolic substitution for cross-file calls). |
 | `diagnostics.py` | `Diagnostic` dataclass and `Severity` type alias (`"error" \| "warning"`). |
 | `report.py` | `FileReport` (list of diagnostics + hover facts per file) and `HoverFact` (inferred shape at a source location). |
 | `cli.py` | Typer CLI. `tsf check` runs the analyzer and formats output. `tsf version` prints the package version. |
 | `rules/__init__.py` | Re-exports all public inference functions. |
-| `rules/shape_ops.py` | `infer_permute`, `infer_transpose`, `infer_reshape`, `infer_flatten`, `infer_squeeze`, `infer_unsqueeze`, `infer_size`, `infer_cat`, `infer_stack`, `infer_matmul`, `infer_mm`, `infer_movedim`, `infer_reduction`, `infer_chunk`, `infer_split`, `infer_einsum`. |
+| `rules/shape_ops.py` | Tensor/functional shape-operator inference. See [Supported Operators](operators.md) for the canonical user-facing inventory. |
 | `rules/broadcasting.py` | `infer_binary_broadcast` — wraps `broadcast_shapes` for element-wise ops. |
 | `rules/linear.py` | `infer_linear` for `nn.Linear`. |
 | `rules/conv2d.py` | `infer_conv2d` for `nn.Conv2d`. |
@@ -67,6 +71,11 @@ Value  (TypeAlias)
 
 Spec values are stored in `module_specs` (keyed by attribute name) when their constructor is parsed from `__init__`. When `self.linear(x)` is called, the analyzer looks up `"linear"` in `module_specs`, retrieves the spec, and calls the appropriate inference function. Module aliases (`m = self.linear; m(x)`) are also supported: spec values stored in `env` are looked up before falling through to `func_sigs`.
 
+When an annotated function call is resolved through `func_sigs`, symbolic
+dimensions in the callee signature are unified with the caller argument shapes
+and substituted into the declared return shape. Imported helper functions are
+handled the same way when they can be resolved through `ProjectIndex`.
+
 ## Diagnostic codes
 
 | Code | Severity | Trigger |
@@ -88,3 +97,6 @@ Spec values are stored in `module_specs` (keyed by attribute name) when their co
 ## Adding a new operator
 
 See [Development → Adding a new operator](development.md#adding-a-new-operator).
+Operator behavior and support status should be documented only once in
+[Supported Operators](operators.md); this page describes the implementation
+structure, not the canonical support matrix.

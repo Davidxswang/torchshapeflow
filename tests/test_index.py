@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import textwrap
 from pathlib import Path
+
+import pytest
 
 from torchshapeflow.analyzer import analyze_source
 from torchshapeflow.index import (
@@ -88,6 +91,20 @@ def test_collect_raw_aliases_annotated_assign() -> None:
         import torch
         from torchshapeflow import Shape
         Image: TypeAlias = Annotated[torch.Tensor, Shape(3, 224, 224)]
+    """)
+    module = parse_source(src)
+    raw = collect_raw_aliases(module)
+    assert "Image" in raw
+
+
+def test_collect_raw_aliases_type_statement() -> None:
+    if not hasattr(ast, "TypeAlias"):
+        pytest.skip("Python type statements require an AST runtime with ast.TypeAlias.")
+    src = textwrap.dedent("""\
+        from typing import Annotated
+        import torch
+        from torchshapeflow import Shape
+        type Image = Annotated[torch.Tensor, Shape(3, 224, 224)]
     """)
     module = parse_source(src)
     raw = collect_raw_aliases(module)
@@ -246,6 +263,25 @@ def test_same_file_typealias_annotated_assign_form() -> None:
     report = analyze_source(src, Path("mem.py"))
     assert report.diagnostics == []
     assert any(hover.name == "y" and hover.shape == "[1, B, 128]" for hover in report.hovers)
+
+
+def test_same_file_typealias_type_statement_form() -> None:
+    """Python 3.12+ ``type X = ...`` aliases also seed param shape inference."""
+    if not hasattr(ast, "TypeAlias"):
+        pytest.skip("Python type statements require an AST runtime with ast.TypeAlias.")
+    src = textwrap.dedent("""\
+        from typing import Annotated
+        import torch
+        from torchshapeflow import Shape
+
+        type Batch = Annotated[torch.Tensor, Shape("B", "T", 64)]
+
+        def project(x: Batch):
+            y = x.transpose(-2, -1)
+    """)
+    report = analyze_source(src, Path("mem.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 64, T]" for hover in report.hovers)
 
 
 # ---------------------------------------------------------------------------

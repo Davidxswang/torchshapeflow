@@ -9,7 +9,8 @@ The extension is CLI-backed: on each file save (or on demand), it runs `tsf chec
 - **Diagnostics** — red underlines at the location of shape errors with human-readable messages.
 - **Hover shapes** — hover over a tensor variable to see its inferred shape (e.g. `[B, 12, T, 64]`), or hover over a function name to see the full shape signature of its tensor parameters and return value.
 
-The extension does not run a background language server. Each check is a fresh `tsf` invocation against the current file.
+The extension does not run a background language server. Each check is a fresh
+`tsf` invocation against the current file.
 
 ## Installing
 
@@ -54,13 +55,18 @@ Triggered automatically by a `v*` tag push via `.github/workflows/release.yml`:
 - If the `VSCE_PAT` GitHub Actions secret is set, the extension is published to the VS Code Marketplace.
 - If the `OVSX_PAT` secret is set, it is also published to Open VSX.
 
-Both secrets are optional. If missing, the workflow still succeeds — packaging and GitHub Release creation always run. See `RELEASING.md` in the repository root for the full release steps.
+Both secrets are optional. If missing, the workflow still succeeds — packaging
+and GitHub Release creation always run. See [Releasing](releasing.md) for the
+full release steps.
 
 ## Known limitations
 
-- Hover information is most accurate for annotated parameters and variables assigned in the same function body. References to shapes defined in other files are not resolved.
-- Only the active file is analyzed. Cross-file shape propagation is not supported.
-- Hover results for re-used variable names reflect the first assignment in the function. Rebinding the same name produces only one hover entry.
+- Diagnostics and hovers are produced only for the active file.
+- Imported shape aliases and annotated helper functions in project-local files
+  can still affect inference for the active file, because the CLI builds a
+  project index during each check.
+- There is no workspace-wide background analysis or long-lived project state;
+  results are recomputed on each run.
 
 ## Future direction
 

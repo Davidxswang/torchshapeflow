@@ -30,7 +30,7 @@ If your project uses a local `.venv`, no configuration is needed.
 ## Features
 
 - **Diagnostics** — shape mismatches and invalid operations are highlighted inline as errors or warnings
-- **Hover** — hover over any tensor variable or function parameter to see its inferred shape
+- **Hover** — hover over tensor variables, annotated parameters, and function signatures to see inferred shapes
 
 ## Usage
 
@@ -47,16 +47,20 @@ The analyzer runs automatically when you save a Python file. You can also trigge
 
 ## Annotation syntax
 
-Annotate your function parameters with `Shape` to enable shape inference:
+Annotate your function parameters with `Shape` to enable shape inference. In
+practice, symbolic dimensions are the default path for model code:
 
 ```python
 from typing import Annotated
 import torch
 from torchshapeflow import Shape
 
-def forward(self, x: Annotated[torch.Tensor, Shape("B", 3, 32, 32)]):
-    y = self.conv(x)   # hover shows: [B, 8, 32, 32]
-    ...
+def attention_scores(
+    q: Annotated[torch.Tensor, Shape("B", "H", "T", "D")],
+    k: Annotated[torch.Tensor, Shape("B", "H", "T", "D")],
+):
+    scores = q @ k.transpose(-2, -1)  # hover shows: [B, H, T, T]
+    return scores
 ```
 
 See the [full documentation](https://davidxswang.github.io/torchshapeflow) for supported operators and annotation syntax.

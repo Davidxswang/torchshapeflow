@@ -59,6 +59,44 @@ class ProjectIndex:
         return _resolve_module_path(module_name, from_path)
 
 
+def build_file_data(
+    module: ast.Module,
+    path: Path,
+    project_index: ProjectIndex | None = None,
+) -> FileData:
+    """Build alias and function-signature data for a parsed module.
+
+    If *project_index* is provided, project-local ``from ... import ...``
+    references are resolved first so imported aliases and annotated function
+    signatures are available while processing the current module.
+    """
+    raw_aliases = collect_raw_aliases(module)
+    import_map = collect_imports(module)
+
+    imported_aliases: dict[str, TensorValue] = {}
+    imported_funcs: dict[str, FuncSig] = {}
+    if project_index is not None:
+        for local_name, (module_name, original_name) in import_map.items():
+            src_path = project_index.resolve_import(module_name, path)
+            if src_path is not None:
+                file_data = project_index.index_file(src_path)
+                if original_name in file_data.aliases:
+                    imported_aliases[local_name] = file_data.aliases[original_name]
+                if original_name in file_data.func_sigs:
+                    imported_funcs[local_name] = file_data.func_sigs[original_name]
+
+    all_aliases = resolve_aliases(raw_aliases, imported_aliases)
+
+    func_sigs: dict[str, FuncSig] = dict(imported_funcs)
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef):
+            sig = extract_func_sig(node, all_aliases)
+            if sig is not None:
+                func_sigs[node.name] = sig
+
+    return FileData(aliases=all_aliases, func_sigs=func_sigs)
+
+
 def unify_dims(declared: tuple[Dim, ...], actual: tuple[Dim, ...]) -> dict[str, Dim]:
     """Build a substitution mapping declared symbolic dims to actual dims.
 
@@ -97,7 +135,8 @@ def collect_raw_aliases(module: ast.Module) -> dict[str, ast.AST]:
     """Collect module-level type alias assignments, returning name → RHS AST node.
 
     Handles both plain assignment (``X = Annotated[...]``) and annotated
-    assignment (``X: TypeAlias = Annotated[...]``).
+    assignment (``X: TypeAlias = Annotated[...]``). On Python 3.12+ runtimes,
+    ``type X = Annotated[...]`` statements are collected as well.
     """
     aliases: dict[str, ast.AST] = {}
     for node in module.body:
@@ -111,6 +150,9 @@ def collect_raw_aliases(module: ast.Module) -> dict[str, ast.AST]:
             and node.value is not None
         ):
             aliases[node.target.id] = node.value
+        elif hasattr(ast, "TypeAlias") and isinstance(node, ast.TypeAlias):
+            if isinstance(node.name, ast.Name):
+                aliases[node.name.id] = node.value
     return aliases
 
 
@@ -201,32 +243,7 @@ def _index_file(path: Path, project_index: ProjectIndex) -> FileData:
         module = parse_source(source, str(path))
     except SyntaxError:
         return FileData()
-
-    raw_aliases = collect_raw_aliases(module)
-    import_map = collect_imports(module)
-
-    # Resolve aliases and func sigs from imported files first.
-    imported_aliases: dict[str, TensorValue] = {}
-    imported_funcs: dict[str, FuncSig] = {}
-    for local_name, (module_name, original_name) in import_map.items():
-        src_path = project_index.resolve_import(module_name, path)
-        if src_path is not None:
-            file_data = project_index.index_file(src_path)
-            if original_name in file_data.aliases:
-                imported_aliases[local_name] = file_data.aliases[original_name]
-            if original_name in file_data.func_sigs:
-                imported_funcs[local_name] = file_data.func_sigs[original_name]
-
-    all_aliases = resolve_aliases(raw_aliases, imported_aliases)
-
-    func_sigs: dict[str, FuncSig] = dict(imported_funcs)
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef):
-            sig = extract_func_sig(node, all_aliases)
-            if sig is not None:
-                func_sigs[node.name] = sig
-
-    return FileData(aliases=all_aliases, func_sigs=func_sigs)
+    return build_file_data(module, path, project_index)
 
 
 def _resolve_module_path(module_name: str, from_path: Path) -> Path | None:

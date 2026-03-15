@@ -62,7 +62,12 @@ Shape("B", "T", 768)
 
 ## Type alias pattern
 
-For shapes used in multiple places, define a `TypeAlias`:
+For shapes used in multiple places, define a shape alias. This is the
+recommended way to build a project-wide tensor vocabulary around
+`Annotated[..., Shape(...)]`.
+
+For maximum compatibility across supported Python versions, prefer
+`X: TypeAlias = ...`:
 
 ```python
 from typing import Annotated, TypeAlias
@@ -76,7 +81,16 @@ def encode(x: ImageBatch) -> FeatureMap:
     ...
 ```
 
-Both `X = Annotated[...]` (plain assignment) and `X: TypeAlias = Annotated[...]` (annotated assignment) are supported. Python 3.12+ `type` statements work as well:
+The following forms are supported:
+
+- `X = Annotated[...]`
+- `X: TypeAlias = Annotated[...]`
+- `type X = Annotated[...]` on Python 3.12+ runtimes
+
+The `type` statement is parsed by the host Python interpreter. If you run
+TorchShapeFlow on Python 3.10 or 3.11, use one of the assignment forms above.
+
+Equivalent Python 3.12+ syntax:
 
 ```python
 type ImageBatch = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
@@ -90,14 +104,14 @@ contracts every module must respect:
 
 ```python
 # shapes.py — project shape vocabulary
-from typing import Annotated
+from typing import Annotated, TypeAlias
 import torch
 from torchshapeflow import Shape
 
-type ImageBatch   = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
-type FeatureMap   = Annotated[torch.Tensor, Shape("B", "C", "H", "W")]
-type TokenSequence = Annotated[torch.Tensor, Shape("B", "T")]
-type Embedding    = Annotated[torch.Tensor, Shape("B", "T", "D")]
+ImageBatch: TypeAlias = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
+FeatureMap: TypeAlias = Annotated[torch.Tensor, Shape("B", "C", "H", "W")]
+TokenSequence: TypeAlias = Annotated[torch.Tensor, Shape("B", "T")]
+Embedding: TypeAlias = Annotated[torch.Tensor, Shape("B", "T", "D")]
 ```
 
 Other modules import from this file, keeping annotations short and consistent:
@@ -120,7 +134,8 @@ def decode(features: FeatureMap) -> Embedding:
 
 The analyzer resolves these aliases at analysis time, so shape inference and
 diagnostics work exactly as if the full `Annotated[...]` form were written
-inline.
+inline. This is the intended pattern for config-driven model code: keep dynamic
+axes symbolic, give them stable names, and reuse those contracts across files.
 
 ### Importing TypeAliases from other files
 

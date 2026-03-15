@@ -28,7 +28,12 @@ TorchShapeFlow is shape-only by design. `DType`, `Device`, `Layout`, and distrib
 ## Known analyzer limitations
 
 - **Cross-file resolution is project-relative only.** Imports are resolved relative to the importing file's directory. Third-party packages (e.g. `from torch.nn import Linear`) are not indexed — only project-local `.py` files.
-- **Symbolic input dim skips validation but still propagates output.** `Shape("B", "C", "H", "W")` through `nn.Conv2d(3, 64, 3)` will not verify `C == 3`, but the output `[B, 64, H_out, W_out]` is still inferred. Likewise for `nn.Linear`.
+- **Symbolic input dims prioritize propagation over fixed-constant validation.**
+  `Shape("B", "C", "H", "W")` through `nn.Conv2d(3, 64, 3)` will not verify
+  `C == 3`, but the output `[B, 64, H_out, W_out]` is still inferred. Likewise
+  for `nn.Linear`. This is intentional: symbolic contracts are the primary path
+  for config-driven code, while constant validation is an extra check when a
+  dimension is known statically.
 - **Non-literal constructor args fall back to `__init__` defaults.** If a constructor arg is a name (e.g. `nn.Linear(in_dim, out_dim)`) and the corresponding `__init__` parameter has an integer default, that default is used. If there is no default, the spec is dropped and no shape is inferred.
 
 ## Explicit non-goals for the MVP

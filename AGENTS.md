@@ -62,7 +62,11 @@ make clean         # remove build and cache artifacts
 - Diagnostics use stable codes: `TSF1001`, `TSF1002`, ...
 - `make check` must pass before a PR is merged (it runs exactly what CI runs).
 - No `Any` without justification. `mypy --strict` must pass.
-- Only direct `self.attr` access is tracked; aliases (`m = self.linear`) are not.
+- Prefer a single source of truth in both code and docs. Factor shared logic
+  instead of duplicating it, and link to canonical documentation rather than
+  restating support details in multiple places.
+- Direct `self.attr` access is tracked, and simple module aliases
+  (`m = self.linear; y = m(x)`) are supported. Dynamic indirection is not.
 
 ## Conventions
 
