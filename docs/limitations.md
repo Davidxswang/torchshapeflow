@@ -19,7 +19,7 @@ The following are not handled:
 
 ## Only listed operators produce inferred shapes
 
-Unsupported calls produce no diagnostic — the result is silently dropped from the shape environment. See [Supported Operators](operators.md) for the full list.
+When an unsupported call is encountered inside a function with tensor-annotated parameters, TorchShapeFlow emits inference gap warnings (TSF2001, TSF2002, TSF2003) so that users know where shape tracking is lost. Outside annotated functions, unsupported calls are silently ignored. See [Supported Operators](operators.md) for the full list.
 
 ## dtype, device, and layout are not analyzed
 
