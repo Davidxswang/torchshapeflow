@@ -1,5 +1,29 @@
 # Annotation Syntax
 
+## Why annotate?
+
+TorchShapeFlow follows the same philosophy as Pydantic: the value comes from
+declaring contracts explicitly. Pydantic gives you runtime validation when you
+declare field types; TorchShapeFlow gives you static shape verification when you
+declare tensor shapes.
+
+Shape checking is **opt-in per function**. The analyzer has nothing to check
+until you add an annotation — and that is the point. You decide which boundaries
+matter, annotate those parameters, and let the tool verify consistency from
+there.
+
+Symbolic dimensions like `"B"`, `"T"`, `"D"` are the primary mechanism.
+In production deep-learning code, batch sizes and sequence lengths come from
+config objects at runtime — not from literals in the source. The analyzer does
+not try to chase config resolution. Instead, symbolic dims flow through
+operations, and the analyzer verifies that every operation is consistent with the
+declared shapes. Concrete integer dimensions (e.g. `3` for RGB channels, `768`
+for a known embedding size) are a useful special case, not the default.
+
+Start by annotating `forward` (or your main entry point), run `tsf check`, and
+follow the diagnostics outward. See [Quickstart — Workflow](quickstart.md#workflow)
+for a step-by-step guide.
+
 ## Basic form
 
 Annotate function parameters using `typing.Annotated` with a `Shape(...)` metadata object:
@@ -52,6 +76,54 @@ def encode(x: ImageBatch) -> FeatureMap:
     ...
 ```
 
+Both `X = Annotated[...]` (plain assignment) and `X: TypeAlias = Annotated[...]` (annotated assignment) are supported. Python 3.12+ `type` statements work as well:
+
+```python
+type ImageBatch = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
+```
+
+### Project-level shape vocabulary
+
+For larger projects, collect all shape aliases in a single file. This becomes
+your project's shape vocabulary — a single source of truth for the tensor
+contracts every module must respect:
+
+```python
+# shapes.py — project shape vocabulary
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+type ImageBatch   = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
+type FeatureMap   = Annotated[torch.Tensor, Shape("B", "C", "H", "W")]
+type TokenSequence = Annotated[torch.Tensor, Shape("B", "T")]
+type Embedding    = Annotated[torch.Tensor, Shape("B", "T", "D")]
+```
+
+Other modules import from this file, keeping annotations short and consistent:
+
+```python
+# encoder.py
+from shapes import ImageBatch, FeatureMap
+
+def encode(x: ImageBatch) -> FeatureMap:
+    ...
+```
+
+```python
+# decoder.py
+from shapes import FeatureMap, Embedding
+
+def decode(features: FeatureMap) -> Embedding:
+    ...
+```
+
+The analyzer resolves these aliases at analysis time, so shape inference and
+diagnostics work exactly as if the full `Annotated[...]` form were written
+inline.
+
+### Importing TypeAliases from other files
+
 TypeAliases may also be defined in a separate file and imported:
 
 ```python
@@ -70,8 +142,6 @@ from shapes import ImageBatch
 def preprocess(x: ImageBatch):
     y = x.permute(0, 2, 3, 1)  # [B, H, W, 3] — inferred correctly
 ```
-
-Both `X = Annotated[...]` (plain assignment) and `X: TypeAlias = Annotated[...]` (annotated assignment) are supported.
 
 ## Cross-file function calls
 

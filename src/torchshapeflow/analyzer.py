@@ -199,6 +199,56 @@ _TENSOR_CONSTRUCTORS: frozenset[str] = frozenset(
     {"zeros", "ones", "empty", "randn", "rand", "full"}
 )
 
+# Tensor methods that return non-tensor values (no shape to track).
+# These should NOT trigger TSF2001 when they return None from _eval_tensor_method.
+_NON_TENSOR_METHODS: frozenset[str] = frozenset({"item", "numpy", "tolist", "dim"})
+
+# Python builtins and common utility functions that should NOT trigger TSF2002.
+_BUILTIN_NAMES: frozenset[str] = frozenset(
+    {
+        "print",
+        "len",
+        "range",
+        "enumerate",
+        "zip",
+        "int",
+        "float",
+        "str",
+        "list",
+        "tuple",
+        "dict",
+        "set",
+        "type",
+        "isinstance",
+        "hasattr",
+        "getattr",
+        "sorted",
+        "reversed",
+        "min",
+        "max",
+        "sum",
+        "abs",
+        "round",
+        "map",
+        "filter",
+        "any",
+        "all",
+        "bool",
+        "id",
+        "repr",
+        "hash",
+        "iter",
+        "next",
+        "super",
+        "vars",
+        "dir",
+        "object",
+        "property",
+        "staticmethod",
+        "classmethod",
+    }
+)
+
 
 @dataclass
 class ModuleContext:
@@ -209,6 +259,7 @@ class ModuleContext:
     func_sigs: dict[str, FuncSig] = field(default_factory=dict)
     return_shape: TensorValue | None = None
     collected_returns: list[TensorValue | None] = field(default_factory=list)
+    in_annotated_function: bool = False
 
     def error(
         self,
@@ -497,6 +548,9 @@ def _analyze_function(
             env[argument.arg] = tensor
             context.hover(argument.arg, argument, tensor)
             tensor_params.append((argument.arg, tensor))
+    # Track whether this function has tensor-annotated parameters (for TSF2xxx warnings).
+    old_in_annotated = context.in_annotated_function
+    context.in_annotated_function = len(tensor_params) > 0
     # Parse return annotation; set on context so _analyze_statement can validate.
     old_return_shape = context.return_shape
     old_collected_returns = context.collected_returns
@@ -517,6 +571,7 @@ def _analyze_function(
         )
     context.collected_returns = old_collected_returns
     context.return_shape = old_return_shape
+    context.in_annotated_function = old_in_annotated
 
 
 def _emit_signature_hover(
@@ -857,7 +912,8 @@ def _eval_call(
     callee_name = qualified_name(node.func)
     if isinstance(node.func, ast.Attribute):
         owner: Value | Dim | None
-        if isinstance(node.func.value, ast.Name) and node.func.value.id == "self":
+        is_self_call = isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+        if is_self_call:
             owner = module_specs.get(node.func.attr)
         else:
             owner = _eval_expr(node.func.value, env, context, module_specs)
@@ -878,6 +934,22 @@ def _eval_call(
             argument = _eval_expr(node.args[0], env, context, module_specs) if node.args else None
             if isinstance(argument, TensorValue):
                 return _apply_module_spec(owner, argument, node, context, module_specs)
+        # TSF2003: self.xxx(tensor) where xxx has no spec.
+        if is_self_call and owner is None and context.in_annotated_function:
+            has_tensor_arg = False
+            for arg_node in node.args:
+                arg_val = _eval_expr(arg_node, env, context, module_specs)
+                if isinstance(arg_val, TensorValue):
+                    has_tensor_arg = True
+                    break
+            if has_tensor_arg:
+                attr = node.func.attr
+                context.error(
+                    node,
+                    "TSF2003",
+                    f"No shape spec for 'self.{attr}' — shape not tracked.",
+                    severity="warning",
+                )
     if callee_name.endswith("reshape") and len(node.args) >= 2:
         tensor = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(tensor, TensorValue):
@@ -1119,6 +1191,43 @@ def _eval_call(
                         else:
                             mapping[sym_name] = bound_dim
             return TensorValue(apply_substitution(sig.return_shape.shape, mapping))
+    # TSF2002: call to unannotated function with tensor arg in annotated function.
+    if (
+        isinstance(node.func, ast.Name)
+        and context.in_annotated_function
+        and node.func.id not in _BUILTIN_NAMES
+        and node.func.id not in context.func_sigs
+    ):
+        # Check that it is not a known module spec alias already handled above.
+        env_val = env.get(node.func.id)
+        is_module_spec = isinstance(
+            env_val,
+            (
+                LinearSpec,
+                Conv2dSpec,
+                PassthroughSpec,
+                EmbeddingSpec,
+                Pool2dSpec,
+                SequentialSpec,
+                MultiheadAttentionSpec,
+            ),
+        )
+        if not is_module_spec:
+            has_tensor_arg = False
+            for arg_node in node.args:
+                arg_val = _eval_expr(arg_node, env, context, module_specs)
+                if isinstance(arg_val, TensorValue):
+                    has_tensor_arg = True
+                    break
+            if has_tensor_arg:
+                func_name = node.func.id
+                context.error(
+                    node,
+                    "TSF2002",
+                    f"Call to unannotated function '{func_name}'"
+                    " — shape not tracked. Consider adding a Shape annotation.",
+                    severity="warning",
+                )
     return None
 
 
@@ -1266,6 +1375,16 @@ def _eval_tensor_method(
                 return result
     if name == "numel":
         return IntegerValue(None)
+    if name in _NON_TENSOR_METHODS:
+        return None
+    # TSF2001: warn about unsupported tensor method in annotated function.
+    if context.in_annotated_function:
+        context.error(
+            node,
+            "TSF2001",
+            f"Unsupported tensor method '.{name}' — shape not tracked.",
+            severity="warning",
+        )
     return None
 
 

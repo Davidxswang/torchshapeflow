@@ -1129,3 +1129,224 @@ def f(x: Annotated[torch.Tensor, Shape("B", 3, 4)]):
     hover = next((h for h in report.hovers if h.name == "y"), None)
     assert hover is not None
     assert hover.shape == "[B, 6, 2]"
+
+
+# ---------------------------------------------------------------------------
+# TSF2001: unsupported tensor method warning
+# ---------------------------------------------------------------------------
+
+
+def test_tsf2001_unsupported_tensor_method() -> None:
+    """Annotated function calling x.some_weird_method() should produce TSF2001."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    y = x.some_weird_method()
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(warnings) == 1
+    assert ".some_weird_method" in warnings[0].message
+    assert warnings[0].severity == "warning"
+
+
+def test_tsf2001_no_false_positive_known_ops() -> None:
+    """Known operations like reshape, flatten should NOT produce TSF2001."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 3, 32, 32)]):
+    y = x.reshape(x.shape[0], -1)
+    z = y.flatten(0)
+    w = z.detach()
+    v = w.contiguous()
+    return v
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2001 = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(tsf2001) == 0
+
+
+def test_tsf2001_no_warning_in_unannotated_function() -> None:
+    """Unannotated function should NOT produce TSF2001."""
+    source = """
+import torch
+
+def fn(x):
+    y = x.some_weird_method()
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2001 = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(tsf2001) == 0
+
+
+def test_tsf2001_silent_for_non_tensor_methods() -> None:
+    """Methods like .item(), .numpy(), .tolist(), .dim() should NOT produce TSF2001."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    a = x.item()
+    b = x.numpy()
+    c = x.tolist()
+    d = x.dim()
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2001 = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(tsf2001) == 0
+
+
+# ---------------------------------------------------------------------------
+# TSF2002: call to unannotated function with tensor arg
+# ---------------------------------------------------------------------------
+
+
+def test_tsf2002_unannotated_function_call() -> None:
+    """Annotated function calling helper(x) where helper has no annotations."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def helper(x):
+    return x
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    y = helper(x)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF2002"]
+    assert len(warnings) == 1
+    assert "helper" in warnings[0].message
+    assert warnings[0].severity == "warning"
+
+
+def test_tsf2002_no_false_positive_builtins() -> None:
+    """Calling print(x), len(x) should NOT produce TSF2002."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+    print(x)
+    n = len(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2002 = [d for d in report.diagnostics if d.code == "TSF2002"]
+    assert len(tsf2002) == 0
+
+
+def test_tsf2002_no_warning_in_unannotated_function() -> None:
+    """Unannotated function should NOT produce TSF2002."""
+    source = """
+import torch
+
+def helper(x):
+    return x
+
+def fn(x):
+    y = helper(x)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2002 = [d for d in report.diagnostics if d.code == "TSF2002"]
+    assert len(tsf2002) == 0
+
+
+def test_tsf2002_no_warning_for_annotated_function() -> None:
+    """Calling a function that has Shape annotations should NOT produce TSF2002."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def helper(
+    x: Annotated[torch.Tensor, Shape("B", "D")],
+) -> Annotated[torch.Tensor, Shape("B", "D")]:
+    return x
+
+def fn(a: Annotated[torch.Tensor, Shape(8, 64)]):
+    out = helper(a)
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2002 = [d for d in report.diagnostics if d.code == "TSF2002"]
+    assert len(tsf2002) == 0
+
+
+# ---------------------------------------------------------------------------
+# TSF2003: unresolvable self.xxx module
+# ---------------------------------------------------------------------------
+
+
+def test_tsf2003_unresolvable_self_module() -> None:
+    """Class with self.custom = SomeModule() and self.custom(x) in annotated forward."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.custom = SomeUnknownModule()
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        y = self.custom(x)
+        return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF2003"]
+    assert len(warnings) == 1
+    assert "self.custom" in warnings[0].message
+    assert warnings[0].severity == "warning"
+
+
+def test_tsf2003_no_warning_for_known_modules() -> None:
+    """Known modules (nn.Linear, nn.Conv2d, etc.) should NOT produce TSF2003."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.linear = nn.Linear(64, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        y = self.linear(x)
+        return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2003 = [d for d in report.diagnostics if d.code == "TSF2003"]
+    assert len(tsf2003) == 0
+
+
+def test_tsf2003_no_warning_in_unannotated_forward() -> None:
+    """Unannotated forward method should NOT produce TSF2003."""
+    source = """
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        self.custom = SomeUnknownModule()
+
+    def forward(self, x):
+        y = self.custom(x)
+        return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    tsf2003 = [d for d in report.diagnostics if d.code == "TSF2003"]
+    assert len(tsf2003) == 0

@@ -81,6 +81,9 @@ Spec values are stored in `module_specs` (keyed by attribute name) when their co
 | `TSF1008` | error | Invalid `permute`, `transpose`, `squeeze`, or `unsqueeze` dimensions |
 | `TSF1009` | error | Return shape does not match the declared return type annotation |
 | `TSF1010` | error | Symbolic dim bound to conflicting values across call-site arguments |
+| `TSF2001` | warning | Unsupported tensor method — shape inference lost |
+| `TSF2002` | warning | Call to unannotated function with tensor arg — shape inference lost |
+| `TSF2003` | warning | Unresolvable module `self.xxx` — no spec inferred |
 
 ## Adding a new operator
 

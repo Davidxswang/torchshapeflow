@@ -26,6 +26,16 @@ $ tsf check broken.py
 broken.py:9:9 error TSF1004 Invalid reshape.
 ```
 
+## Philosophy
+
+Like Pydantic for data validation, TorchShapeFlow is **annotation-first**:
+you declare shape contracts on function parameters, and the analyzer verifies
+consistency. Without annotations, there is nothing to check — and that is by
+design. You opt in where it matters, starting with `forward`, and extend
+coverage incrementally. Symbolic dimensions (`"B"`, `"T"`, `"D"`) are the
+primary mechanism; the analyzer verifies that operations are consistent without
+needing concrete sizes.
+
 ## What it does
 
 - Reads `Annotated[torch.Tensor, Shape(...)]` annotations from function parameters
