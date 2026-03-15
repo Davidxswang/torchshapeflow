@@ -1115,6 +1115,7 @@ def _eval_call(
                                 f"Symbolic dim '{sym_name}' bound to conflicting values: "
                                 f"{render_dim(mapping[sym_name])} vs {render_dim(bound_dim)}.",
                             )
+                            mapping[sym_name] = UnknownDim("?")
                         else:
                             mapping[sym_name] = bound_dim
             return TensorValue(apply_substitution(sig.return_shape.shape, mapping))

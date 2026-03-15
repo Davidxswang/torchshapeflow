@@ -193,6 +193,22 @@ def test_subscript_slice_negative_both_constant() -> None:
     assert str(result.shape) == "[2, C]"
 
 
+def test_subscript_slice_negative_lower_out_of_range_clamps() -> None:
+    # x[-100:] on [10, C]: -100 clamps to 0, so 10-0=10.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-100:]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[10, C]"
+
+
+def test_subscript_slice_negative_upper_out_of_range_clamps() -> None:
+    # x[:-100] on [10, C]: -100 clamps to 0, upper=0 not > lower=0 → preserved.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[:-100]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[10, C]"
+
+
 def test_subscript_none_inserts_dim() -> None:
     result = infer_subscript(_t("B", "C"), _subscript_node("x[None]"))
     assert result is not None

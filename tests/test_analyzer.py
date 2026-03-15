@@ -1081,6 +1081,10 @@ def main(
     errors = [d for d in report.diagnostics if d.code == "TSF1010"]
     assert len(errors) == 1
     assert "B" in errors[0].message
+    # Conflicting dim becomes unknown in the return shape
+    hover = next((h for h in report.hovers if h.name == "out"), None)
+    assert hover is not None
+    assert hover.shape == "[?, 64]"
 
 
 # ---------------------------------------------------------------------------

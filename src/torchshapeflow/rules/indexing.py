@@ -79,11 +79,11 @@ def infer_subscript(
             # Resolve open-ended upper bound when dim is constant
             if upper_val is None and isinstance(current_dim, ConstantDim):
                 upper_val = current_dim.value
-            # Resolve negative lower/upper bounds when dim is constant
+            # Resolve negative lower/upper bounds when dim is constant (clamp to valid range)
             if lower_val is not None and lower_val < 0 and isinstance(current_dim, ConstantDim):
-                lower_val = current_dim.value + lower_val
+                lower_val = max(0, current_dim.value + lower_val)
             if upper_val is not None and upper_val < 0 and isinstance(current_dim, ConstantDim):
-                upper_val = current_dim.value + upper_val
+                upper_val = max(0, current_dim.value + upper_val)
             if (
                 step_is_one
                 and lower_val is not None
