@@ -39,6 +39,7 @@ from torchshapeflow.model import (
     broadcast_has_uncertain_dims,
     make_dim,
     normalize_index,
+    product_dim,
     render_dim,
 )
 from torchshapeflow.parser import AnnotationParseError, parse_source, parse_tensor_annotation
@@ -1003,7 +1004,10 @@ def _eval_call(
                 src = _int_or_tuple(node.args[1])
                 dst = _int_or_tuple(node.args[2])
                 if src is not None and dst is not None:
-                    return infer_movedim(tensor, src, dst)
+                    result = infer_movedim(tensor, src, dst)
+                    if result is None:
+                        context.error(node, "TSF1008", "Invalid movedim dimensions.")
+                    return result
     # torch.einsum(subscript, t1, t2, ...) or torch.einsum(subscript, [t1, t2]).
     if callee_name.endswith("einsum") and node.args:
         subscript_node = node.args[0]
@@ -1248,6 +1252,13 @@ def _eval_tensor_method(
     if name == "permute":
         order = tuple(int_from_ast(arg) for arg in node.args)
         if any(item is None for item in order):
+            if context.in_annotated_function:
+                context.error(
+                    node,
+                    "TSF2001",
+                    "Cannot resolve '.permute' order statically — shape not tracked.",
+                    severity="warning",
+                )
             return None
         result = infer_permute(tensor, tuple(item for item in order if item is not None))
         if result is None:
@@ -1257,6 +1268,13 @@ def _eval_tensor_method(
         first = int_from_ast(node.args[0])
         second = int_from_ast(node.args[1])
         if first is None or second is None:
+            if context.in_annotated_function:
+                context.error(
+                    node,
+                    "TSF2001",
+                    "Cannot resolve '.transpose' dims statically — shape not tracked.",
+                    severity="warning",
+                )
             return None
         result = infer_transpose(tensor, first, second)
         if result is None:
@@ -1266,6 +1284,13 @@ def _eval_tensor_method(
         start_dim = _positional_int(node.args, 0, 0)
         end_dim = _positional_int(node.args, 1, -1)
         if start_dim is None or end_dim is None:
+            if context.in_annotated_function:
+                context.error(
+                    node,
+                    "TSF2001",
+                    "Cannot resolve '.flatten' dims statically — shape not tracked.",
+                    severity="warning",
+                )
             return None
         result = infer_flatten(tensor, start_dim, end_dim)
         if result is None:
@@ -1280,6 +1305,13 @@ def _eval_tensor_method(
     if name == "unsqueeze" and node.args:
         dim = int_from_ast(node.args[0])
         if dim is None:
+            if context.in_annotated_function:
+                context.error(
+                    node,
+                    "TSF2001",
+                    "Cannot resolve '.unsqueeze' dim statically — shape not tracked.",
+                    severity="warning",
+                )
             return None
         result = infer_unsqueeze(tensor, dim)
         if result is None:
@@ -1324,6 +1356,8 @@ def _eval_tensor_method(
                 dim = _keyword_int(node, "dim", 0)
             if dim is not None:
                 chunk_result = infer_chunk(tensor, n, dim)
+                if chunk_result is None:
+                    context.error(node, "TSF1008", "Invalid chunk dimension.")
                 return chunk_result
     if name == "split" and node.args:
         split_result = _split_from_call(tensor, node)
@@ -1333,7 +1367,10 @@ def _eval_tensor_method(
         src = _int_or_tuple(node.args[0])
         dst = _int_or_tuple(node.args[1])
         if src is not None and dst is not None:
-            return infer_movedim(tensor, src, dst)
+            result = infer_movedim(tensor, src, dst)
+            if result is None:
+                context.error(node, "TSF1008", "Invalid movedim dimensions.")
+            return result
     if name == "diagonal":
         offset_val = _positional_int(node.args, 0, 0)
         if offset_val is None:
@@ -1646,12 +1683,7 @@ def _infer_repeat(
     for d, size_node in zip(padded, size_nodes, strict=True):
         repeat_val = int_from_ast(size_node)
         if repeat_val is not None:
-            if isinstance(d, ConstantDim):
-                result_dims.append(ConstantDim(d.value * repeat_val))
-            elif repeat_val == 1:
-                result_dims.append(d)
-            else:
-                result_dims.append(ExpressionDim(f"{d}*{repeat_val}"))
+            result_dims.append(product_dim((ConstantDim(repeat_val), d)))
         else:
             result_dims.append(ExpressionDim(f"{d}*?"))
     return TensorValue(TensorShape(tuple(result_dims)))

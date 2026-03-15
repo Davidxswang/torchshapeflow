@@ -1350,3 +1350,132 @@ class Model(nn.Module):
     report = analyze_source(source, Path("f.py"))
     tsf2003 = [d for d in report.diagnostics if d.code == "TSF2003"]
     assert len(tsf2003) == 0
+
+
+# ---------------------------------------------------------------------------
+# Missing error/warning diagnostics — operator argument resolution
+# ---------------------------------------------------------------------------
+
+
+def test_permute_non_literal_args_warns() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")], order):
+    y = x.permute(order)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warns = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(warns) == 1
+    assert "permute" in warns[0].message
+
+
+def test_permute_non_literal_no_warn_unannotated() -> None:
+    source = """
+import torch
+
+def fn(x, order):
+    y = x.permute(order)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert len(report.diagnostics) == 0
+
+
+def test_transpose_non_literal_args_warns() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H")], d):
+    y = x.transpose(d, 0)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warns = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(warns) == 1
+    assert "transpose" in warns[0].message
+
+
+def test_flatten_non_literal_args_warns() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")], s):
+    y = x.flatten(s)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warns = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(warns) == 1
+    assert "flatten" in warns[0].message
+
+
+def test_unsqueeze_non_literal_arg_warns() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "C")], d):
+    y = x.unsqueeze(d)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    warns = [d for d in report.diagnostics if d.code == "TSF2001"]
+    assert len(warns) == 1
+    assert "unsqueeze" in warns[0].message
+
+
+def test_chunk_bad_dim_errors() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T")]):
+    a, b = x.chunk(2, dim=5)
+    return a
+"""
+    report = analyze_source(source, Path("f.py"))
+    errors = [d for d in report.diagnostics if d.code == "TSF1008"]
+    assert len(errors) == 1
+    assert "chunk" in errors[0].message
+
+
+def test_movedim_bad_indices_errors() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T")]):
+    y = x.movedim(5, 0)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    errors = [d for d in report.diagnostics if d.code == "TSF1008"]
+    assert len(errors) == 1
+    assert "movedim" in errors[0].message
+
+
+def test_movedim_functional_bad_indices_errors() -> None:
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T")]):
+    y = torch.movedim(x, 5, 0)
+    return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    errors = [d for d in report.diagnostics if d.code == "TSF1008"]
+    assert len(errors) == 1
+    assert "movedim" in errors[0].message

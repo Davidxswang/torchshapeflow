@@ -278,18 +278,23 @@ def test_chunk_divisible() -> None:
     assert all(str(tv.shape) == "[B, T, 64]" for tv in result.tensors)
 
 
-def test_chunk_symbolic_dim_gives_unknown() -> None:
+def test_chunk_symbolic_dim_expression() -> None:
     result = infer_chunk(_t("B", "T", "D"), n=3, dim=-1)
     assert result is not None
     assert len(result.tensors) == 3
-    # size is unknown but rank is preserved
+    # Symbolic dim produces expression, rank preserved
     assert all(tv.rank == 3 for tv in result.tensors)
+    assert all(str(tv.shape) == "[B, T, D//3]" for tv in result.tensors)
 
 
 def test_chunk_non_divisible() -> None:
     result = infer_chunk(_t("B", 10), n=3, dim=-1)
     assert result is not None
     assert len(result.tensors) == 3
+    # ceil(10/3) = 4 for first two chunks, remainder 2 for last
+    assert str(result.tensors[0].shape) == "[B, 4]"
+    assert str(result.tensors[1].shape) == "[B, 4]"
+    assert str(result.tensors[2].shape) == "[B, 2]"
 
 
 def test_chunk_out_of_range_returns_none() -> None:
