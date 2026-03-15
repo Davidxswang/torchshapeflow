@@ -172,7 +172,7 @@ out = torch.einsum("ij,j->i", A, v)
 out = torch.einsum("i,j->ij", u, v)
 ```
 
-Emits `TSF1003` if contracted dimensions have mismatched constant sizes.
+Emits `TSF1003` if contracted dimensions have mismatched sizes (constant or symbolic).
 
 ---
 
@@ -203,7 +203,12 @@ x.chunk(n, dim=0)
 ```
 
 Input: `(*dims)`
-Output: a tuple of `n` tensors. When `dims[dim]` is a constant evenly divisible by `n`, each chunk has `dims[dim] // n` on the split axis. When not evenly divisible, all chunk sizes are reported as unknown (`?`).
+Output: a tuple of `n` tensors.
+
+- **Constant dim, evenly divisible:** each chunk has `dims[dim] // n` on the split axis.
+- **Constant dim, not evenly divisible:** first `n-1` chunks have `ceil(dims[dim] / n)`, last chunk has the remainder.
+- **Symbolic dim:** each chunk has `dims[dim]//n` as an expression.
+
 Supports tuple-unpacking: `a, b, c = x.chunk(3, dim=-1)`.
 
 ### `split`
@@ -368,7 +373,7 @@ Output: `(N, C, *new_spatial)`
 
 - **`size` as a tuple:** `(H_out, W_out)` — each spatial dim is replaced by the given constant.
 - **`size` as a variable** (e.g. `labels.shape[-2:]`): evaluated at analysis time when possible.
-- **`scale_factor` as a float or tuple:** each constant spatial dim is multiplied; symbolic dims become `?`.
+- **`scale_factor` as a float or tuple:** each constant spatial dim is multiplied. Symbolic dims with integer scale factors produce expressions (e.g. `2*H`); non-integer factors produce `?`.
 
 When neither `size` nor `scale_factor` can be resolved, no hover is emitted (silent pass).
 
@@ -391,7 +396,8 @@ torch.diagonal(x, offset=0, dim1=0, dim2=1)
 
 Removes `dim1` and `dim2` from the shape and appends the diagonal length.
 When both dimensions are constants, diagonal length = `max(0, min(d1, d2) - |offset|)`.
-Symbolic dimensions produce `?` for the diagonal length.
+When both dimensions are the same symbolic dim and `offset=0`, the diagonal length equals that dim.
+Otherwise, the diagonal length is `?`.
 
 Input: `(*dims)` — rank ≥ 2.
 Output: `(*remaining, diag_len)`
