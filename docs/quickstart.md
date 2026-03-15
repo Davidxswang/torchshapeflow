@@ -16,7 +16,11 @@ make install   # uv sync --extra dev
 
 ## Annotate your tensors
 
-TorchShapeFlow reads `Annotated[torch.Tensor, Shape(...)]` parameter annotations. String dimensions are symbolic; integer dimensions are constant:
+TorchShapeFlow reads `Annotated[torch.Tensor, Shape(...)]` parameter annotations.
+String dimensions are symbolic; integer dimensions are constant. In real
+config-driven model code, symbolic dimensions are the default path. Use integer
+dimensions when an axis is genuinely fixed by the contract, such as RGB
+channels or a known embedding width:
 
 ```python
 from typing import Annotated

@@ -10,10 +10,7 @@ from torchshapeflow.index import (
     FuncSig,
     ProjectIndex,
     apply_substitution,
-    collect_imports,
-    collect_raw_aliases,
-    extract_func_sig,
-    resolve_aliases,
+    build_file_data,
     unify_dims,
 )
 from torchshapeflow.model import (
@@ -250,6 +247,16 @@ _BUILTIN_NAMES: frozenset[str] = frozenset(
     }
 )
 
+_MODULE_SPEC_TYPES = (
+    LinearSpec,
+    Conv2dSpec,
+    PassthroughSpec,
+    EmbeddingSpec,
+    Pool2dSpec,
+    SequentialSpec,
+    MultiheadAttentionSpec,
+)
+
 
 @dataclass
 class ModuleContext:
@@ -309,34 +316,8 @@ def analyze_source(
     project_index: ProjectIndex | None = None,
 ) -> FileReport:
     module = parse_source(source, str(path))
-
-    raw_aliases = collect_raw_aliases(module)
-    import_map = collect_imports(module)
-
-    imported_aliases: dict[str, TensorValue] = {}
-    imported_funcs: dict[str, FuncSig] = {}
-    if project_index is not None:
-        for local_name, (module_name, original_name) in import_map.items():
-            src_path = project_index.resolve_import(module_name, path)
-            if src_path is not None:
-                file_data = project_index.index_file(src_path)
-                if original_name in file_data.aliases:
-                    imported_aliases[local_name] = file_data.aliases[original_name]
-                if original_name in file_data.func_sigs:
-                    imported_funcs[local_name] = file_data.func_sigs[original_name]
-
-    all_aliases = resolve_aliases(raw_aliases, imported_aliases)
-
-    local_func_sigs: dict[str, FuncSig] = {}
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef):
-            sig = extract_func_sig(node, all_aliases)
-            if sig is not None:
-                local_func_sigs[node.name] = sig
-
-    all_func_sigs = {**imported_funcs, **local_func_sigs}
-
-    context = ModuleContext(path=path, aliases=all_aliases, func_sigs=all_func_sigs)
+    file_data = build_file_data(module, path, project_index)
+    context = ModuleContext(path=path, aliases=file_data.aliases, func_sigs=file_data.func_sigs)
     class_specs = _collect_class_specs(module)
     for node in module.body:
         if isinstance(node, ast.FunctionDef):
@@ -904,6 +885,99 @@ def _apply_module_spec(
     return None
 
 
+def _module_spec_from_value(value: Value | Dim | None) -> ModuleSpec | None:
+    if isinstance(value, _MODULE_SPEC_TYPES):
+        return value
+    return None
+
+
+def _call_has_tensor_arg(
+    args: Sequence[ast.expr],
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> bool:
+    for arg_node in args:
+        arg_val = _eval_expr(arg_node, env, context, module_specs)
+        if isinstance(arg_val, TensorValue):
+            return True
+    return False
+
+
+def _eval_named_module_alias_call(
+    node: ast.Call,
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> Value | None:
+    if not isinstance(node.func, ast.Name):
+        return None
+    spec = _module_spec_from_value(env.get(node.func.id))
+    if spec is None:
+        return None
+    argument = _eval_expr(node.args[0], env, context, module_specs) if node.args else None
+    if isinstance(argument, TensorValue):
+        return _apply_module_spec(spec, argument, node, context, module_specs)
+    return None
+
+
+def _eval_signature_call(
+    node: ast.Call,
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> TensorValue | None:
+    if not isinstance(node.func, ast.Name):
+        return None
+    sig = context.func_sigs.get(node.func.id)
+    if sig is None or sig.return_shape is None:
+        return None
+    mapping: dict[str, Dim] = {}
+    for param_tv, arg_node in zip(sig.param_shapes, node.args, strict=False):
+        if param_tv is None:
+            continue
+        arg_val = _eval_expr(arg_node, env, context, module_specs)
+        if isinstance(arg_val, TensorValue):
+            sub = unify_dims(param_tv.shape.dims, arg_val.shape.dims)
+            for sym_name, bound_dim in sub.items():
+                if sym_name in mapping and render_dim(mapping[sym_name]) != render_dim(bound_dim):
+                    context.error(
+                        node,
+                        "TSF1010",
+                        f"Symbolic dim '{sym_name}' bound to conflicting values: "
+                        f"{render_dim(mapping[sym_name])} vs {render_dim(bound_dim)}.",
+                    )
+                    mapping[sym_name] = UnknownDim("?")
+                else:
+                    mapping[sym_name] = bound_dim
+    return TensorValue(apply_substitution(sig.return_shape.shape, mapping))
+
+
+def _maybe_warn_unannotated_function_call(
+    node: ast.Call,
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> None:
+    if not isinstance(node.func, ast.Name):
+        return
+    if not context.in_annotated_function:
+        return
+    if node.func.id in _BUILTIN_NAMES or node.func.id in context.func_sigs:
+        return
+    if _module_spec_from_value(env.get(node.func.id)) is not None:
+        return
+    if _call_has_tensor_arg(node.args, env, context, module_specs):
+        func_name = node.func.id
+        context.error(
+            node,
+            "TSF2002",
+            f"Call to unannotated function '{func_name}'"
+            " — shape not tracked. Consider adding a Shape annotation.",
+            severity="warning",
+        )
+
+
 def _eval_call(
     node: ast.Call,
     env: dict[str, Value],
@@ -920,30 +994,14 @@ def _eval_call(
             owner = _eval_expr(node.func.value, env, context, module_specs)
         if isinstance(owner, TensorValue):
             return _eval_tensor_method(owner, node, context, env, module_specs)
-        if isinstance(
-            owner,
-            (
-                LinearSpec,
-                Conv2dSpec,
-                PassthroughSpec,
-                EmbeddingSpec,
-                Pool2dSpec,
-                SequentialSpec,
-                MultiheadAttentionSpec,
-            ),
-        ):
+        spec = _module_spec_from_value(owner)
+        if spec is not None:
             argument = _eval_expr(node.args[0], env, context, module_specs) if node.args else None
             if isinstance(argument, TensorValue):
-                return _apply_module_spec(owner, argument, node, context, module_specs)
+                return _apply_module_spec(spec, argument, node, context, module_specs)
         # TSF2003: self.xxx(tensor) where xxx has no spec.
         if is_self_call and owner is None and context.in_annotated_function:
-            has_tensor_arg = False
-            for arg_node in node.args:
-                arg_val = _eval_expr(arg_node, env, context, module_specs)
-                if isinstance(arg_val, TensorValue):
-                    has_tensor_arg = True
-                    break
-            if has_tensor_arg:
+            if _call_has_tensor_arg(node.args, env, context, module_specs):
                 attr = node.func.attr
                 context.error(
                     node,
@@ -1152,86 +1210,13 @@ def _eval_call(
                     split_result = infer_split(tensor_arg, split_size, dim)
                     if split_result is not None:
                         return split_result
-    # Module alias: m = self.linear; m(x) — look up spec stored in env.
-    if isinstance(node.func, ast.Name):
-        env_val = env.get(node.func.id)
-        if isinstance(
-            env_val,
-            (
-                LinearSpec,
-                Conv2dSpec,
-                PassthroughSpec,
-                EmbeddingSpec,
-                Pool2dSpec,
-                SequentialSpec,
-                MultiheadAttentionSpec,
-            ),
-        ):
-            argument = _eval_expr(node.args[0], env, context, module_specs) if node.args else None
-            if isinstance(argument, TensorValue):
-                return _apply_module_spec(env_val, argument, node, context, module_specs)
-    # User-defined / cross-file function call: look up in func_sigs.
-    if isinstance(node.func, ast.Name):
-        sig = context.func_sigs.get(node.func.id)
-        if sig is not None and sig.return_shape is not None:
-            mapping: dict[str, Dim] = {}
-            for param_tv, arg_node in zip(sig.param_shapes, node.args, strict=False):
-                if param_tv is None:
-                    continue
-                arg_val = _eval_expr(arg_node, env, context, module_specs)
-                if isinstance(arg_val, TensorValue):
-                    sub = unify_dims(param_tv.shape.dims, arg_val.shape.dims)
-                    for sym_name, bound_dim in sub.items():
-                        if sym_name in mapping and render_dim(mapping[sym_name]) != render_dim(
-                            bound_dim
-                        ):
-                            context.error(
-                                node,
-                                "TSF1010",
-                                f"Symbolic dim '{sym_name}' bound to conflicting values: "
-                                f"{render_dim(mapping[sym_name])} vs {render_dim(bound_dim)}.",
-                            )
-                            mapping[sym_name] = UnknownDim("?")
-                        else:
-                            mapping[sym_name] = bound_dim
-            return TensorValue(apply_substitution(sig.return_shape.shape, mapping))
-    # TSF2002: call to unannotated function with tensor arg in annotated function.
-    if (
-        isinstance(node.func, ast.Name)
-        and context.in_annotated_function
-        and node.func.id not in _BUILTIN_NAMES
-        and node.func.id not in context.func_sigs
-    ):
-        # Check that it is not a known module spec alias already handled above.
-        env_val = env.get(node.func.id)
-        is_module_spec = isinstance(
-            env_val,
-            (
-                LinearSpec,
-                Conv2dSpec,
-                PassthroughSpec,
-                EmbeddingSpec,
-                Pool2dSpec,
-                SequentialSpec,
-                MultiheadAttentionSpec,
-            ),
-        )
-        if not is_module_spec:
-            has_tensor_arg = False
-            for arg_node in node.args:
-                arg_val = _eval_expr(arg_node, env, context, module_specs)
-                if isinstance(arg_val, TensorValue):
-                    has_tensor_arg = True
-                    break
-            if has_tensor_arg:
-                func_name = node.func.id
-                context.error(
-                    node,
-                    "TSF2002",
-                    f"Call to unannotated function '{func_name}'"
-                    " — shape not tracked. Consider adding a Shape annotation.",
-                    severity="warning",
-                )
+    module_alias_result = _eval_named_module_alias_call(node, env, context, module_specs)
+    if module_alias_result is not None:
+        return module_alias_result
+    signature_result = _eval_signature_call(node, env, context, module_specs)
+    if signature_result is not None:
+        return signature_result
+    _maybe_warn_unannotated_function_call(node, env, context, module_specs)
     return None
 
 

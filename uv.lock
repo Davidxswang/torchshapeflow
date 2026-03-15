@@ -1168,11 +1168,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6.0" },
-    { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.5.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
+    { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6.1" },
+    { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.7.5" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.19.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.6" },
     { name = "torch", marker = "extra == 'dev'", specifier = ">=2.10.0" },
     { name = "typer", specifier = ">=0.16.0" },
 ]

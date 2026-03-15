@@ -22,6 +22,13 @@ make typecheck # mypy .
 
 `make check` runs exactly what CI runs. If it passes locally it will pass in CI.
 
+## Design discipline
+
+- Prefer a single source of truth in both code and docs.
+- Factor shared implementation instead of copying analyzer/index logic in two places.
+- Put canonical user-facing operator semantics in [Supported Operators](operators.md).
+- Use other docs to explain architecture, workflow, or context, then link back to the canonical page instead of restating long support lists.
+
 ## Full make target reference
 
 | Target | Command | Purpose |
