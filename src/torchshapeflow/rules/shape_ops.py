@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from math import ceil
+
 from torchshapeflow.model import (
     ConstantDim,
     Dim,
+    ExpressionDim,
     IntegerValue,
     ShapeTupleValue,
     TensorShape,
@@ -13,6 +16,7 @@ from torchshapeflow.model import (
     normalize_index,
     product_dim,
     quotient_dim,
+    render_dim,
     sum_dim,
 )
 
@@ -355,15 +359,28 @@ def infer_chunk(tensor: TensorValue, n: int, dim: int) -> TensorTupleValue | Non
     if norm_dim is None:
         return None
     original = tensor.shape.dims[norm_dim]
-    if isinstance(original, ConstantDim) and original.value % n == 0:
-        chunk_size: Dim = ConstantDim(original.value // n)
-    else:
-        chunk_size = UnknownDim("?")
     prefix = tensor.shape.dims[:norm_dim]
     suffix = tensor.shape.dims[norm_dim + 1 :]
-    chunk_shape = TensorShape(prefix + (chunk_size,) + suffix)
-    chunk_tv = TensorValue(chunk_shape)
-    return TensorTupleValue(tuple(chunk_tv for _ in range(n)))
+    if isinstance(original, ConstantDim):
+        total = original.value
+        if total % n == 0:
+            # All chunks equal.
+            chunk_size = ConstantDim(total // n)
+            chunk_shape = TensorShape(prefix + (chunk_size,) + suffix)
+            return TensorTupleValue(tuple(TensorValue(chunk_shape) for _ in range(n)))
+        # Non-divisible: first (n-1) chunks get ceil(total/n), last gets remainder.
+        big = ceil(total / n)
+        remainder = total - big * (n - 1)
+        chunks: list[TensorValue] = []
+        for i in range(n):
+            size = big if i < n - 1 else remainder
+            shape = TensorShape(prefix + (ConstantDim(size),) + suffix)
+            chunks.append(TensorValue(shape))
+        return TensorTupleValue(tuple(chunks))
+    # Symbolic dim: express chunk size as a symbolic expression.
+    chunk_dim: Dim = ExpressionDim(f"{render_dim(original)}//{n}")
+    chunk_shape = TensorShape(prefix + (chunk_dim,) + suffix)
+    return TensorTupleValue(tuple(TensorValue(chunk_shape) for _ in range(n)))
 
 
 def infer_split(
@@ -520,6 +537,9 @@ def infer_interpolate(
         for d, f in zip(spatial, scale_factor, strict=True):
             if isinstance(d, ConstantDim):
                 new_spatial.append(ConstantDim(int(d.value * f)))
+            elif f == int(f):
+                # Integer scale factor: express as product (e.g. "2*H").
+                new_spatial.append(product_dim((ConstantDim(int(f)), d)))
             else:
                 new_spatial.append(UnknownDim("?"))
         return TensorValue(TensorShape(batch_channel + tuple(new_spatial)))
@@ -569,6 +589,9 @@ def infer_diagonal(
     if isinstance(d1, ConstantDim) and isinstance(d2, ConstantDim):
         diag_size = max(0, min(d1.value, d2.value) - abs(offset))
         diag_dim: Dim = ConstantDim(diag_size)
+    elif offset == 0 and render_dim(d1) == render_dim(d2):
+        # Same symbolic dim and no offset: diagonal length equals the dim.
+        diag_dim = d1
     else:
         diag_dim = UnknownDim("?")
     excluded = frozenset((n1, n2))
@@ -650,12 +673,8 @@ def infer_einsum(subscript: str, tensors: list[TensorValue]) -> TensorValue | No
         for label, dim in zip(spec, tensor.shape.dims, strict=True):
             existing = label_to_dim.get(label)
             if existing is not None:
-                if (
-                    isinstance(existing, ConstantDim)
-                    and isinstance(dim, ConstantDim)
-                    and existing.value != dim.value
-                ):
-                    return None  # contraction dimension mismatch
+                if render_dim(existing) != render_dim(dim):
+                    return None  # dimension mismatch (constant or symbolic)
             else:
                 label_to_dim[label] = dim
 

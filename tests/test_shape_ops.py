@@ -559,6 +559,18 @@ def test_einsum_label_count_mismatch() -> None:
     assert infer_einsum("ijk,jk->ik", [_t(2, 3), _t(3, 4)]) is None
 
 
+def test_einsum_symbolic_dim_conflict() -> None:
+    # Same label maps to different symbolic dims → rejected
+    assert infer_einsum("ij,jk->ik", [_t("M", "K"), _t("L", "N")]) is None
+
+
+def test_einsum_symbolic_dim_match() -> None:
+    # Same label maps to same symbolic dim → accepted
+    result = infer_einsum("ij,jk->ik", [_t("M", "K"), _t("K", "N")])
+    assert result is not None
+    assert str(result.shape) == "[M, N]"
+
+
 # ---------------------------------------------------------------------------
 # infer_interpolate
 # ---------------------------------------------------------------------------
@@ -576,7 +588,14 @@ def test_interpolate_scale_factor() -> None:
     assert result is not None and str(result.shape) == "[B, C, 64, 64]"
 
 
-def test_interpolate_symbolic_spatial() -> None:
+def test_interpolate_symbolic_spatial_integer_scale() -> None:
+    # Integer scale factor with symbolic spatial → expression
+    result = infer_interpolate(_t("B", "C", "H", "W"), size=None, scale_factor=(2.0, 2.0))
+    assert result is not None and str(result.shape) == "[B, C, 2*H, 2*W]"
+
+
+def test_interpolate_symbolic_spatial_non_integer_scale() -> None:
+    # Non-integer scale factor with symbolic spatial → unknown
     result = infer_interpolate(_t("B", "C", "H", "W"), size=None, scale_factor=(0.5, 0.5))
     assert result is not None and str(result.shape) == "[B, C, ?, ?]"
 
@@ -619,6 +638,24 @@ def test_diagonal_with_batch() -> None:
 def test_diagonal_offset() -> None:
     result = infer_diagonal(_t(4, 4), offset=1, dim1=0, dim2=1)
     assert result is not None and str(result.shape) == "[3]"
+
+
+def test_diagonal_symbolic_same_dim_no_offset() -> None:
+    # Both dims are the same symbolic dim and offset=0 → diagonal length equals that dim
+    result = infer_diagonal(_t("B", "D", "D"), offset=0, dim1=-2, dim2=-1)
+    assert result is not None and str(result.shape) == "[B, D]"
+
+
+def test_diagonal_symbolic_different_dims() -> None:
+    # Different symbolic dims → unknown
+    result = infer_diagonal(_t("B", "H", "W"), offset=0, dim1=-2, dim2=-1)
+    assert result is not None and str(result.shape) == "[B, ?]"
+
+
+def test_diagonal_symbolic_with_offset() -> None:
+    # Same symbolic dim but non-zero offset → unknown (can't compute min-|offset|)
+    result = infer_diagonal(_t("B", "D", "D"), offset=1, dim1=-2, dim2=-1)
+    assert result is not None and str(result.shape) == "[B, ?]"
 
 
 # ---------------------------------------------------------------------------
