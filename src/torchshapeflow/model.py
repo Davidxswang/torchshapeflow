@@ -244,7 +244,8 @@ def quotient_dim(numerator: tuple[Dim, ...], denominator: tuple[Dim, ...]) -> Di
         ConstantDim if the result is a whole number, ExpressionDim if symbolic factors
         remain, or None if the constant remainder is not evenly divisible (invalid reshape).
     """
-    # Cancel matching symbolic/expression factors
+    # Cancel matching symbolic/expression factors by string comparison.
+    # Note: "B*C" and "C*B" are treated as different (structural, not algebraic).
     num_list = list(numerator)
     den_list = list(denominator)
     for dim in list(den_list):

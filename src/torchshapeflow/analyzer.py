@@ -678,6 +678,9 @@ def _merge_envs(
       differing ones.
     - If the key existed before the ``if`` and was not changed by either → keep it.
     - Otherwise → drop the key from env.
+
+    Invariant: both branch envs must be initialized as copies of ``pre_env``
+    so that pre-existing variables appear in both and are preserved.
     """
     all_keys = set(env_then) | set(env_else)
     env.clear()

@@ -177,6 +177,22 @@ def test_subscript_slice_negative_lower_constant() -> None:
     assert str(result.shape) == "[2, C]"
 
 
+def test_subscript_slice_negative_upper_constant() -> None:
+    # x[:-1] on [10, C]: upper resolves to 10-1=9, lower is 0 → 9.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[:-1]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[9, C]"
+
+
+def test_subscript_slice_negative_both_constant() -> None:
+    # x[-3:-1] on [10, C]: lower=10-3=7, upper=10-1=9 → 2.
+    result = infer_subscript(_t(10, "C"), _subscript_node("x[-3:-1]"))
+    assert result is not None
+    assert isinstance(result, TensorValue)
+    assert str(result.shape) == "[2, C]"
+
+
 def test_subscript_none_inserts_dim() -> None:
     result = infer_subscript(_t("B", "C"), _subscript_node("x[None]"))
     assert result is not None

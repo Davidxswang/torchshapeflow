@@ -980,14 +980,7 @@ class Net(nn.Module):
 """
     report = analyze_source(source, Path("f.py"))
     assert report.diagnostics == []
-    hover = next(
-        (
-            h
-            for h in report.hovers
-            if h.name == "<return>" or (h.name != "x" and h.shape.startswith("["))
-        ),
-        None,
-    )
+    hover = next((h for h in report.hovers if h.name == "<return>"), None)
     assert hover is not None
     assert hover.shape == "[B, 32]"
 
