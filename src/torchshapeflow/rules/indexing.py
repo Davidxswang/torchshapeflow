@@ -84,6 +84,9 @@ def infer_subscript(
                 lower_val = max(0, current_dim.value + lower_val)
             if upper_val is not None and upper_val < 0 and isinstance(current_dim, ConstantDim):
                 upper_val = max(0, current_dim.value + upper_val)
+            # Clamp positive upper bound to dim size (Python slice semantics)
+            if upper_val is not None and isinstance(current_dim, ConstantDim):
+                upper_val = min(upper_val, current_dim.value)
             if (
                 step_is_one
                 and lower_val is not None
