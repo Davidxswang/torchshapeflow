@@ -5,7 +5,7 @@ import { HoverController } from "./hover";
 import { TorchShapeFlowClient } from "./client";
 
 export function activate(context: vscode.ExtensionContext): void {
-  const client = new TorchShapeFlowClient();
+  const client = new TorchShapeFlowClient(context.extensionPath);
   const diagnostics = new DiagnosticsController();
   const hover = new HoverController();
   const output = vscode.window.createOutputChannel("Torch Shape Flow");

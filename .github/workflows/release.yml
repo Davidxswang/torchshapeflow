@@ -35,7 +35,57 @@ jobs:
           name: python-dist
           path: dist/*
 
+  build-bundled-cli-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - run: docker pull quay.io/pypa/manylinux2014_x86_64
+      - run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -lc '
+              set -euo pipefail &&
+              /opt/python/cp312-cp312/bin/python --version &&
+              /opt/python/cp312-cp312/bin/python -m pip install --disable-pip-version-check uv &&
+              export PATH="/opt/python/cp312-cp312/bin:$PATH" &&
+              uv python install 3.12 &&
+              UV_PYTHON="$(uv python find 3.12)" &&
+              "$UV_PYTHON" --version &&
+              uv sync --extra dev --python "$UV_PYTHON" &&
+              uv run --python "$UV_PYTHON" python scripts/build_bundled_cli.py --target linux-x64 --output-root extensions/vscode/bin --clean --smoke-test
+            '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundled-cli-linux-x64
+          path: extensions/vscode/bin/linux-x64/*
+
+  build-bundled-cli:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - run: uv run python scripts/build_bundled_cli.py --target ${{ matrix.target }} --output-root extensions/vscode/bin --clean --smoke-test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundled-cli-${{ matrix.target }}
+          path: extensions/vscode/bin/${{ matrix.target }}/*
+
   build-extension:
+    needs: [build-bundled-cli-linux, build-bundled-cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -44,6 +94,18 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: extensions/vscode/package-lock.json
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundled-cli-linux-x64
+          path: extensions/vscode/bin/linux-x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundled-cli-darwin-arm64
+          path: extensions/vscode/bin/darwin-arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundled-cli-win32-x64
+          path: extensions/vscode/bin/win32-x64
       - working-directory: extensions/vscode
         run: npm ci
       - working-directory: extensions/vscode

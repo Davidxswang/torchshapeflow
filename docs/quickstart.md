@@ -14,13 +14,22 @@ cd torchshapeflow
 make install   # uv sync --extra dev
 ```
 
+If you want to run the example PyTorch scripts themselves, install the examples
+extra as well:
+
+```bash
+uv sync --extra dev --extra examples
+```
+
 ## Annotate your tensors
 
-TorchShapeFlow reads `Annotated[torch.Tensor, Shape(...)]` parameter annotations.
-String dimensions are symbolic; integer dimensions are constant. In real
-config-driven model code, symbolic dimensions are the default path. Use integer
-dimensions when an axis is genuinely fixed by the contract, such as RGB
-channels or a known embedding width:
+TorchShapeFlow reads `Annotated[torch.Tensor, Shape(...)]` contracts from your
+annotations. In practice, that usually means function parameters first, then
+shared shape aliases and annotated local variables where you want a stronger
+contract inside the function body. String dimensions are symbolic; integer
+dimensions are constant. In real config-driven model code, symbolic dimensions
+are the default path. Use integer dimensions when an axis is genuinely fixed by
+the contract, such as RGB channels or a known embedding width:
 
 ```python
 from typing import Annotated

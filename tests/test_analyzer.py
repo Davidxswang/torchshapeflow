@@ -871,6 +871,38 @@ def attention_scores(
     )
     assert sig is not None
     assert sig.shape == "(\n  q: [B, H, T, D],\n  k: [B, H, T, D]\n) → [B, H, T, T]"
+    assert sig.kind == "signature"
+
+
+def test_module_typealias_hover() -> None:
+    source = """
+from typing import Annotated, TypeAlias
+import torch
+from torchshapeflow import Shape
+
+Batch: TypeAlias = Annotated[torch.Tensor, Shape("B", "T", 64)]
+"""
+    report = analyze_source(source, Path("f.py"))
+    hover = next((h for h in report.hovers if h.name == "Batch"), None)
+    assert hover is not None
+    assert hover.shape == "[B, T, 64]"
+    assert hover.kind == "alias"
+
+
+def test_alias_reference_hover_in_local_annotation() -> None:
+    source = """
+import torch
+
+def fn():
+    from typing import Annotated, TypeAlias
+    Batch: TypeAlias = Annotated[torch.Tensor, "B T 64"]
+    x: Batch = torch.load("batch.pt")
+"""
+    report = analyze_source(source, Path("f.py"))
+    alias_hovers = [hover for hover in report.hovers if hover.name == "Batch"]
+    assert alias_hovers
+    assert all(hover.shape == "[B, T, 64]" for hover in alias_hovers)
+    assert all(hover.kind == "alias" for hover in alias_hovers)
 
 
 # ---------------------------------------------------------------------------
@@ -1331,6 +1363,52 @@ class Model(nn.Module):
     report = analyze_source(source, Path("f.py"))
     tsf2003 = [d for d in report.diagnostics if d.code == "TSF2003"]
     assert len(tsf2003) == 0
+
+
+def test_local_typealias_and_annotated_variable_seed_inference() -> None:
+    source = """
+import torch
+
+def fn():
+    from typing import Annotated, TypeAlias
+    Batch: TypeAlias = Annotated[torch.Tensor, "B T 64"]
+    x: Batch = torch.load("batch.pt")
+    y = x.transpose(-2, -1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "x" and hover.shape == "[B, T, 64]" for hover in report.hovers)
+    assert any(hover.name == "y" and hover.shape == "[B, 64, T]" for hover in report.hovers)
+
+
+def test_local_plain_alias_assignment_is_supported() -> None:
+    source = """
+import torch
+
+def fn():
+    from typing import Annotated
+    Batch = Annotated[torch.Tensor, "B T 64"]
+    x: Batch = torch.load("batch.pt")
+    y = x.transpose(-2, -1)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[B, 64, T]" for hover in report.hovers)
+
+
+def test_local_annotated_variable_emits_mismatch() -> None:
+    source = """
+from typing import Annotated
+import torch
+
+def fn(x: Annotated[torch.Tensor, "B 64"]):
+    y: Annotated[torch.Tensor, "B 32"] = x
+"""
+    report = analyze_source(source, Path("f.py"))
+    errors = [diagnostic for diagnostic in report.diagnostics if diagnostic.code == "TSF1011"]
+    assert len(errors) == 1
+    assert "[B, 64]" in errors[0].message
+    assert "[B, 32]" in errors[0].message
 
 
 def test_tsf2003_no_warning_in_unannotated_forward() -> None:

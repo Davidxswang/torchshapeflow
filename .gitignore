@@ -10,4 +10,5 @@ site/
 __pycache__/
 node_modules/
 extensions/vscode/out/
+extensions/vscode/bin/
 *.vsix

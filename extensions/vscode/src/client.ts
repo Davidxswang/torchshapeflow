@@ -24,6 +24,7 @@ export interface HoverFact {
   end_column: number;
   name: string;
   shape: string;
+  kind?: "value" | "signature" | "alias";
 }
 
 export interface FileReport {
@@ -37,6 +38,8 @@ interface AnalyzerPayload {
 }
 
 export class TorchShapeFlowClient {
+  constructor(private readonly extensionPath: string) {}
+
   async analyzeDocument(document: vscode.TextDocument): Promise<FileReport | null> {
     if (document.languageId !== "python") {
       return null;
@@ -68,15 +71,25 @@ export class TorchShapeFlowClient {
   }
 
   private resolveCliPath(cwd: string): string {
-    // Prefer .venv/bin/tsf in the workspace root (uv / virtualenv install).
-    const venvBin = path.join(cwd, ".venv", "bin", "tsf");
-    if (fs.existsSync(venvBin)) {
-      return venvBin;
-    }
-    // Fall back to the user-configured path (or bare "tsf" on PATH).
-    return vscode.workspace
+    const configuredCli = vscode.workspace
       .getConfiguration("torchShapeFlow")
-      .get<string>("cliPath", "tsf");
+      .get<string>("cliPath", "")
+      .trim();
+    if (configuredCli) {
+      return configuredCli;
+    }
+
+    const workspaceCli = this.resolveWorkspaceCli(cwd);
+    if (workspaceCli) {
+      return workspaceCli;
+    }
+
+    const bundledCli = this.resolveBundledCli();
+    if (bundledCli) {
+      return bundledCli;
+    }
+
+    return "tsf";
   }
 
   private getWorkingDirectory(document: vscode.TextDocument): string {
@@ -85,5 +98,36 @@ export class TorchShapeFlowClient {
       return folder.uri.fsPath;
     }
     return vscode.Uri.joinPath(document.uri, "..").fsPath;
+  }
+
+  private resolveWorkspaceCli(cwd: string): string | null {
+    const venvDir = path.join(cwd, ".venv");
+    const executable = process.platform === "win32" ? "tsf.exe" : "tsf";
+    const candidate =
+      process.platform === "win32"
+        ? path.join(venvDir, "Scripts", executable)
+        : path.join(venvDir, "bin", executable);
+    return fs.existsSync(candidate) ? candidate : null;
+  }
+
+  private resolveBundledCli(): string | null {
+    const executable = process.platform === "win32" ? "tsf.exe" : "tsf";
+    const candidate = path.join(this.extensionPath, "bin", this.hostTarget(), executable);
+    if (!fs.existsSync(candidate)) {
+      return null;
+    }
+    if (process.platform !== "win32") {
+      try {
+        fs.chmodSync(candidate, 0o755);
+      } catch {
+        // Ignore chmod failures and try to execute the bundled binary as-is.
+      }
+    }
+    return candidate;
+  }
+
+  private hostTarget(): string {
+    const arch = process.arch === "x64" || process.arch === "arm64" ? process.arch : "unknown";
+    return `${process.platform}-${arch}`;
   }
 }

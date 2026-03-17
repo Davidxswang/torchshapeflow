@@ -11,6 +11,7 @@ from torchshapeflow.index import (
     ProjectIndex,
     apply_substitution,
     build_file_data,
+    extract_alias_binding,
     unify_dims,
 )
 from torchshapeflow.model import (
@@ -304,6 +305,19 @@ class ModuleContext:
             )
         )
 
+    def hover_alias(self, name: str, node: ast.AST, tensor: TensorValue) -> None:
+        self.hovers.append(
+            HoverFact(
+                line=getattr(node, "lineno", 1),
+                column=getattr(node, "col_offset", 0) + 1,
+                end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1)),
+                end_column=getattr(node, "end_col_offset", getattr(node, "col_offset", 0)) + 1,
+                name=name,
+                shape=str(tensor.shape),
+                kind="alias",
+            )
+        )
+
 
 def analyze_path(path: Path, project_index: ProjectIndex | None = None) -> FileReport:
     source = path.read_text(encoding="utf-8")
@@ -318,6 +332,7 @@ def analyze_source(
     module = parse_source(source, str(path))
     file_data = build_file_data(module, path, project_index)
     context = ModuleContext(path=path, aliases=file_data.aliases, func_sigs=file_data.func_sigs)
+    _emit_module_alias_hovers(module, context)
     class_specs = _collect_class_specs(module)
     for node in module.body:
         if isinstance(node, ast.FunctionDef):
@@ -355,6 +370,18 @@ def _collect_class_specs(
         if class_specs:
             specs[node.name] = class_specs
     return specs
+
+
+def _emit_module_alias_hovers(module: ast.Module, context: ModuleContext) -> None:
+    for statement in module.body:
+        alias = extract_alias_binding(statement)
+        if alias is None:
+            continue
+        alias_name, alias_node = alias
+        tensor = context.aliases.get(alias_name)
+        target = _alias_target_node(statement)
+        if tensor is not None and target is not None:
+            context.hover_alias(alias_name, target, tensor)
 
 
 def _collect_init_param_defaults(func: ast.FunctionDef) -> dict[str, int]:
@@ -515,6 +542,7 @@ def _analyze_function(
     module_specs: dict[str, ModuleSpec],
 ) -> None:
     env: dict[str, Value] = {}
+    local_aliases: dict[str, TensorValue] = dict(context.aliases)
     tensor_params: list[tuple[str, TensorValue]] = []
     for argument in function.args.args:
         if argument.arg == "self":
@@ -522,10 +550,11 @@ def _analyze_function(
         if argument.annotation is None:
             continue
         try:
-            tensor = parse_tensor_annotation(argument.annotation, context.aliases)
+            tensor = parse_tensor_annotation(argument.annotation, local_aliases)
         except AnnotationParseError as error:
             context.error(argument, "TSF1001", error.message)
             continue
+        _maybe_hover_alias_reference(argument.annotation, local_aliases, context)
         if tensor is not None:
             env[argument.arg] = tensor
             context.hover(argument.arg, argument, tensor)
@@ -539,13 +568,14 @@ def _analyze_function(
     context.collected_returns = []
     if function.returns is not None:
         try:
-            context.return_shape = parse_tensor_annotation(function.returns, context.aliases)
+            context.return_shape = parse_tensor_annotation(function.returns, local_aliases)
         except AnnotationParseError:
             context.return_shape = None
+        _maybe_hover_alias_reference(function.returns, local_aliases, context)
     else:
         context.return_shape = None
     for statement in function.body:
-        _analyze_statement(statement, env, context, module_specs)
+        _analyze_statement(statement, env, context, module_specs, local_aliases)
     # Emit a signature hover on the function name if any tensor params are present.
     if tensor_params:
         _emit_signature_hover(
@@ -603,6 +633,7 @@ def _emit_signature_hover(
             end_column=name_end_col + 1,  # 1-based
             name=function.name,
             shape=sig,
+            kind="signature",
         )
     )
 
@@ -612,15 +643,39 @@ def _analyze_statement(
     env: dict[str, Value],
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
+    aliases: dict[str, TensorValue],
 ) -> None:
+    alias = extract_alias_binding(statement)
+    if alias is not None:
+        alias_name, alias_node = alias
+        try:
+            alias_value = parse_tensor_annotation(alias_node, aliases)
+        except AnnotationParseError as error:
+            context.error(statement, "TSF1001", error.message)
+            return
+        if alias_value is not None:
+            aliases[alias_name] = alias_value
+            target = _alias_target_node(statement)
+            if target is not None:
+                context.hover_alias(alias_name, target, alias_value)
+            return
+        if isinstance(statement, ast.AnnAssign) or (
+            hasattr(ast, "TypeAlias") and isinstance(statement, ast.TypeAlias)
+        ):
+            context.error(
+                statement,
+                "TSF1001",
+                "TypeAlias must resolve to an Annotated tensor annotation.",
+            )
+            return
     if isinstance(statement, ast.Assign):
         value = _eval_expr(statement.value, env, context, module_specs)
-        for target in statement.targets:
-            if isinstance(target, ast.Tuple) and isinstance(value, TensorTupleValue):
-                for t_elt, tv in zip(target.elts, value.tensors, strict=False):
+        for assign_target in statement.targets:
+            if isinstance(assign_target, ast.Tuple) and isinstance(value, TensorTupleValue):
+                for t_elt, tv in zip(assign_target.elts, value.tensors, strict=False):
                     _bind_target(t_elt, tv, env, context)
             else:
-                _bind_target(target, value, env, context)
+                _bind_target(assign_target, value, env, context)
         return
     if isinstance(statement, ast.AugAssign):
         # x += y  →  treat as x = x <op> y, updating env with the broadcast result.
@@ -640,11 +695,28 @@ def _analyze_statement(
                 context.hover(target_name, statement.target, result)
         return
     if isinstance(statement, ast.AnnAssign):
+        declared: TensorValue | None = None
+        try:
+            declared = parse_tensor_annotation(statement.annotation, aliases)
+        except AnnotationParseError as error:
+            context.error(statement, "TSF1001", error.message)
+        _maybe_hover_alias_reference(statement.annotation, aliases, context)
         value = (
             _eval_expr(statement.value, env, context, module_specs)
             if statement.value is not None
             else None
         )
+        if declared is not None:
+            if isinstance(value, TensorValue) and _shapes_definitely_mismatch(
+                declared.shape, value.shape
+            ):
+                context.error(
+                    statement,
+                    "TSF1011",
+                    f"Assigned shape {value.shape} does not match declared {declared.shape}.",
+                )
+            _bind_target(statement.target, declared, env, context)
+            return
         _bind_target(statement.target, value, env, context)
         return
     if isinstance(statement, ast.Return) and statement.value is not None:
@@ -667,7 +739,7 @@ def _analyze_statement(
         _eval_expr(statement.value, env, context, module_specs)
         return
     if isinstance(statement, ast.If):
-        _analyze_if(statement, env, context, module_specs)
+        _analyze_if(statement, env, context, module_specs, aliases)
         return
 
 
@@ -676,6 +748,7 @@ def _analyze_if(
     env: dict[str, Value],
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
+    aliases: dict[str, TensorValue],
 ) -> None:
     """Analyze an if/else block by walking both branches and merging environments.
 
@@ -687,17 +760,69 @@ def _analyze_if(
     for patterns like ``if mask is not None: mask = mask.unsqueeze(1)``).
     """
     pre_env = dict(env)
+    pre_aliases = dict(aliases)
     env_then: dict[str, Value] = dict(env)
+    aliases_then: dict[str, TensorValue] = dict(aliases)
     for stmt in node.body:
-        _analyze_statement(stmt, env_then, context, module_specs)
+        _analyze_statement(stmt, env_then, context, module_specs, aliases_then)
     if node.orelse:
         env_else: dict[str, Value] = dict(pre_env)
+        aliases_else: dict[str, TensorValue] = dict(pre_aliases)
         for stmt in node.orelse:
-            _analyze_statement(stmt, env_else, context, module_specs)
+            _analyze_statement(stmt, env_else, context, module_specs, aliases_else)
         _merge_envs(env, pre_env, env_then, env_else)
+        _merge_aliases(aliases, pre_aliases, aliases_then, aliases_else)
     else:
         # No else: take the ``if`` body environment (pragmatically useful).
         env.update(env_then)
+        aliases.clear()
+        aliases.update(aliases_then)
+
+
+def _merge_aliases(
+    aliases: dict[str, TensorValue],
+    pre_aliases: dict[str, TensorValue],
+    aliases_then: dict[str, TensorValue],
+    aliases_else: dict[str, TensorValue],
+) -> None:
+    """Merge branch-local alias scopes back into the current function scope."""
+    all_keys = set(aliases_then) | set(aliases_else)
+    aliases.clear()
+    for key in all_keys:
+        then_val = aliases_then.get(key)
+        else_val = aliases_else.get(key)
+        if then_val is not None and else_val is not None:
+            if str(then_val.shape) == str(else_val.shape):
+                aliases[key] = then_val
+            elif key in pre_aliases:
+                aliases[key] = pre_aliases[key]
+        elif key in pre_aliases:
+            aliases[key] = pre_aliases[key]
+
+
+def _alias_target_node(statement: ast.stmt) -> ast.Name | None:
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+        target = statement.targets[0]
+        if isinstance(target, ast.Name):
+            return target
+        return None
+    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+        return statement.target
+    if hasattr(ast, "TypeAlias") and isinstance(statement, ast.TypeAlias):
+        if isinstance(statement.name, ast.Name):
+            return statement.name
+    return None
+
+
+def _maybe_hover_alias_reference(
+    annotation: ast.AST,
+    aliases: dict[str, TensorValue],
+    context: ModuleContext,
+) -> None:
+    if isinstance(annotation, ast.Name):
+        alias_value = aliases.get(annotation.id)
+        if alias_value is not None:
+            context.hover_alias(annotation.id, annotation, alias_value)
 
 
 def _merge_envs(
