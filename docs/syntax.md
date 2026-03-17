@@ -60,6 +60,33 @@ Shape("B", 3, "H", "W")
 Shape("B", "T", 768)
 ```
 
+## String shorthand
+
+If you want a shorter spelling, TorchShapeFlow also accepts a single
+space-separated string inside `Annotated[...]`:
+
+```python
+from typing import Annotated
+import torch
+
+Tokens = Annotated[torch.Tensor, "B T D"]
+Images = Annotated[torch.Tensor, "B 3 H W"]
+```
+
+This is equivalent to:
+
+```python
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+Tokens = Annotated[torch.Tensor, Shape("B", "T", "D")]
+Images = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
+```
+
+Use whichever form reads better in your codebase. `Shape(...)` is more explicit;
+the string shorthand is more compact.
+
 ## Type alias pattern
 
 For shapes used in multiple places, define a shape alias. This is the
@@ -95,6 +122,24 @@ Equivalent Python 3.12+ syntax:
 ```python
 type ImageBatch = Annotated[torch.Tensor, Shape("B", 3, "H", "W")]
 ```
+
+Local aliases inside a function body are supported as well. They become
+available from the point where they are declared:
+
+```python
+import torch
+
+def fn():
+    from typing import Annotated, TypeAlias
+
+    Batch: TypeAlias = Annotated[torch.Tensor, "B T 64"]
+    x: Batch = torch.load("batch.pt")
+    y = x.transpose(-2, -1)  # inferred: [B, 64, T]
+```
+
+Local annotated variable declarations are also treated as shape contracts. If
+the right-hand side is shape-tracked, TorchShapeFlow validates that the assigned
+shape matches the declared one.
 
 ### Project-level shape vocabulary
 

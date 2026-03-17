@@ -49,7 +49,9 @@ Common local commands:
 ```bash
 make check
 make python-dist
+make bundle-cli
 make extension-package
+make extension-package-bundled
 make build
 ```
 
@@ -106,18 +108,27 @@ Pushing a clean `vX.Y.Z` tag (no `-rc` or `-test` suffix) triggers the full rele
 On a clean `vX.Y.Z` tag, `release.yml` will:
 
 1. Build Python artifacts (wheel + sdist).
-2. Build and package the VS Code extension (`.vsix`).
-3. Publish to PyPI.
-4. Optionally publish to the VS Code Marketplace if `VSCE_PAT` exists.
-5. Optionally publish to Open VSX if `OVSX_PAT` exists.
-6. Create a GitHub release with all artifacts attached.
+2. Build bundled `tsf` executables for the supported extension targets.
+3. Smoke-test each bundled executable on its build host.
+4. Assemble and package one universal VS Code extension (`.vsix`) containing those bundled executables.
+5. Publish to PyPI.
+6. Optionally publish to the VS Code Marketplace if `VSCE_PAT` exists.
+7. Optionally publish to Open VSX if `OVSX_PAT` exists.
+8. Create a GitHub release with all artifacts attached.
 
 ## Artifact Locations
 
 Local artifact locations:
 
 - Python artifacts: `dist/`
+- Bundled CLI artifacts during local/CI builds: `extensions/vscode/bin/<target>/`
 - Extension artifact: `extensions/vscode/dist/`
+
+Current bundled extension targets:
+
+- `linux-x64` (built in manylinux2014 for broader glibc compatibility)
+- `darwin-arm64`
+- `win32-x64`
 
 Expected outputs:
 

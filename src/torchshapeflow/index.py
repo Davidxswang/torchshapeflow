@@ -59,6 +59,11 @@ class ProjectIndex:
         return _resolve_module_path(module_name, from_path)
 
 
+_TYPE_ALIAS_NAMES: frozenset[str] = frozenset(
+    {"TypeAlias", "typing.TypeAlias", "typing_extensions.TypeAlias"}
+)
+
+
 def build_file_data(
     module: ast.Module,
     path: Path,
@@ -131,6 +136,26 @@ def apply_substitution(shape: TensorShape, mapping: dict[str, Dim]) -> TensorSha
     return TensorShape(new_dims)
 
 
+def extract_alias_binding(statement: ast.stmt) -> tuple[str, ast.AST] | None:
+    """Return the alias name and RHS node for a single alias declaration."""
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+        target = statement.targets[0]
+        if isinstance(target, ast.Name):
+            return target.id, statement.value
+        return None
+    if (
+        isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.value is not None
+        and _qualified_name(statement.annotation) in _TYPE_ALIAS_NAMES
+    ):
+        return statement.target.id, statement.value
+    if hasattr(ast, "TypeAlias") and isinstance(statement, ast.TypeAlias):
+        if isinstance(statement.name, ast.Name):
+            return statement.name.id, statement.value
+    return None
+
+
 def collect_raw_aliases(module: ast.Module) -> dict[str, ast.AST]:
     """Collect module-level type alias assignments, returning name → RHS AST node.
 
@@ -140,19 +165,10 @@ def collect_raw_aliases(module: ast.Module) -> dict[str, ast.AST]:
     """
     aliases: dict[str, ast.AST] = {}
     for node in module.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name):
-                aliases[target.id] = node.value
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.value is not None
-        ):
-            aliases[node.target.id] = node.value
-        elif hasattr(ast, "TypeAlias") and isinstance(node, ast.TypeAlias):
-            if isinstance(node.name, ast.Name):
-                aliases[node.name.id] = node.value
+        alias = extract_alias_binding(node)
+        if alias is not None:
+            name, value = alias
+            aliases[name] = value
     return aliases
 
 
@@ -261,3 +277,14 @@ def _resolve_module_path(module_name: str, from_path: Path) -> Path | None:
         return package_init
 
     return None
+
+
+def _qualified_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _qualified_name(node.value)
+        if not base:
+            return node.attr
+        return f"{base}.{node.attr}"
+    return ""

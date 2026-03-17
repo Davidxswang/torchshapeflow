@@ -28,17 +28,19 @@ broken.py:9:9 error TSF1004 Invalid reshape.
 ## Philosophy
 
 Like Pydantic for data validation, TorchShapeFlow is **annotation-first**:
-you declare shape contracts on function parameters, and the analyzer verifies
-consistency. Without annotations, there is nothing to check — and that is by
-design. You opt in where it matters, starting with `forward`, and extend
-coverage incrementally. Symbolic dimensions (`"B"`, `"T"`, `"D"`) are the
-primary mechanism; the analyzer verifies that operations are consistent without
-needing concrete sizes. Constants still matter, but mainly for semantically
-fixed axes like channels, head counts, or embedding widths.
+you declare shape contracts in annotations, and the analyzer verifies
+consistency. In practice that usually starts with function parameters, then
+expands into shared shape aliases and annotated local variables as coverage
+grows. Without annotations, there is nothing to check — and that is by design.
+You opt in where it matters, starting with `forward`, and extend coverage
+incrementally. Symbolic dimensions (`"B"`, `"T"`, `"D"`) are the primary
+mechanism; the analyzer verifies that operations are consistent without needing
+concrete sizes. Constants still matter, but mainly for semantically fixed axes
+like channels, head counts, or embedding widths.
 
 ## What it does
 
-- Reads `Annotated[torch.Tensor, Shape(...)]` contracts from function parameters
+- Reads `Annotated[torch.Tensor, Shape(...)]` contracts from parameters, shape aliases, and annotated local variables
 - Propagates symbolic shapes through [supported PyTorch operations](operators.md)
 - Emits diagnostics when shapes are incompatible
 - Provides hover-style shape facts for [editor integration](extension.md)

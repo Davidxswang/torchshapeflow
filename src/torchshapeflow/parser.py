@@ -68,6 +68,8 @@ def parse_tensor_annotation(
         if _qualified_name(item) == "Shape":
             dims = tuple(_parse_shape_arg(arg) for arg in _call_args(item))
             return TensorValue(TensorShape(dims))
+        if isinstance(item, ast.Constant) and isinstance(item.value, str):
+            return TensorValue(TensorShape(_parse_shape_string(item.value)))
     raise AnnotationParseError("Annotated tensor is missing Shape(...) metadata.")
 
 
@@ -75,6 +77,19 @@ def _parse_shape_arg(node: ast.AST) -> Dim:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, str)):
         return make_dim(node.value)
     raise AnnotationParseError("Shape metadata only supports string or integer dimensions.")
+
+
+def _parse_shape_string(value: str) -> tuple[Dim, ...]:
+    tokens = [token for token in value.replace(",", " ").split() if token]
+    if not tokens:
+        raise AnnotationParseError("String shorthand must include at least one dimension.")
+    dims: list[Dim] = []
+    for token in tokens:
+        try:
+            dims.append(make_dim(int(token)))
+        except ValueError:
+            dims.append(make_dim(token))
+    return tuple(dims)
 
 
 def _is_annotated(node: ast.AST) -> bool:

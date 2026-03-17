@@ -7,10 +7,10 @@ optional project-local indexing to resolve imported aliases and annotated helper
 signatures:
 
 1. **Parse** — `ast.parse` converts source text into an AST module (`parser.parse_source`).
-2. **Resolve aliases and function signatures** — module-level type aliases are collected from `X = Annotated[...]`, `X: TypeAlias = Annotated[...]`, and, on Python 3.12+ runtimes, `type X = Annotated[...]`. If a `ProjectIndex` is present, project-local `from ... import ...` references are resolved first so imported aliases and annotated helper signatures can be used during analysis.
+2. **Resolve aliases and function signatures** — file-level type aliases are collected from `X = Annotated[...]`, `X: TypeAlias = Annotated[...]`, and, on Python 3.12+ runtimes, `type X = Annotated[...]`. If a `ProjectIndex` is present, project-local `from ... import ...` references are resolved first so imported aliases and annotated helper signatures can be used during analysis. Inside function bodies, local aliases declared with the same forms are added to the local alias scope from the point where they appear.
 3. **Collect module specs** — `_collect_class_specs` walks class `__init__` bodies to find `nn.Linear`, `nn.Conv2d`, `nn.Embedding`, `nn.MaxPool2d`, `nn.AvgPool2d`, `nn.Sequential`, `nn.MultiheadAttention`, and passthrough module assignments, recording their constructor arguments as spec values.
 4. **Seed shape environment** — for each function (or `forward` method), annotated parameters are parsed via `parser.parse_tensor_annotation` and added to the environment `env: dict[str, Value]`.
-5. **Propagate shapes** — `_analyze_statement` walks the function body statement by statement. For each assignment, `_eval_expr` evaluates the right-hand side, dispatching to the appropriate rule function. Results are stored back into `env`.
+5. **Propagate shapes** — `_analyze_statement` walks the function body statement by statement. For each assignment, `_eval_expr` evaluates the right-hand side, dispatching to the appropriate rule function. Local annotated variable declarations are treated as shape contracts, and local alias declarations update the in-scope alias table for later statements. Results are stored back into `env`.
 6. **Emit results** — diagnostics and hover facts accumulate in a `ModuleContext` and are returned as a `FileReport`.
 
 ## Module map

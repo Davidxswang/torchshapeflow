@@ -2,52 +2,47 @@
 
 Static PyTorch tensor shape diagnostics and hover information — without running your code.
 
+Torch Shape Flow is annotation-first and symbolic-first. You declare tensor
+shape contracts with `Annotated[...]`, usually starting at model boundaries, and
+the extension surfaces the inferred consequences inline as diagnostics and
+hovers.
+
 ## Requirements
 
-The extension requires the `torchshapeflow` Python package to be installed:
+No separate Python package installation is required for normal use. The
+published extension ships with bundled `tsf` executables for its supported
+targets and uses them automatically.
 
-```bash
-pip install torchshapeflow
-```
-
-Or, if your project uses a virtual environment:
-
-```bash
-uv add torchshapeflow        # uv projects
-pip install torchshapeflow   # pip/venv projects
-```
+Current bundled targets: Linux x64, macOS arm64, and Windows x64.
+Other platforms can still use a workspace `.venv`, `cliPath`, or `tsf` on
+`PATH`.
 
 ## CLI discovery
 
 The extension looks for `tsf` in this order:
 
-1. `.venv/bin/tsf` in your workspace root (picked up automatically if you use a local virtual environment)
-2. The path configured in `torchShapeFlow.cliPath` (see Settings below)
-3. `tsf` on your system `PATH`
+1. The path configured in `torchShapeFlow.cliPath`, if set
+2. `.venv/bin/tsf` or `.venv/Scripts/tsf.exe` in your workspace root
+3. The bundled executable shipped with the extension
+4. `tsf` on your system `PATH`
 
-If your project uses a local `.venv`, no configuration is needed.
+This keeps the extension zero-install by default while still letting local
+development environments override the executable. Bundled release binaries are
+smoke-tested during CI and release builds before the `.vsix` is published.
 
 ## Features
 
 - **Diagnostics** — shape mismatches and invalid operations are highlighted inline as errors or warnings
-- **Hover** — hover over tensor variables, annotated parameters, and function signatures to see inferred shapes
+- **Hover** — hover over tensor variables, shape aliases, annotated parameters, and function signatures to see inferred shapes
 
 ## Usage
 
-The analyzer runs automatically when you save a Python file. You can also trigger it manually:
+The analyzer runs automatically when you open or save a Python file. You can
+also trigger it manually:
 
 - Open the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) and run **Torch Shape Flow: Run Analysis**
 
-## Settings
-
-| Setting | Default | Description |
-|---|---|---|
-| `torchShapeFlow.cliPath` | `tsf` | Path to the `tsf` executable, if not on PATH or in `.venv` |
-| `torchShapeFlow.runOnSave` | `true` | Run the analyzer automatically on save |
-
-## Annotation syntax
-
-Annotate your function parameters with `Shape` to enable shape inference. In
+Annotate tensor boundaries with `Annotated[...]` to enable shape inference. In
 practice, symbolic dimensions are the default path for model code:
 
 ```python
@@ -63,4 +58,19 @@ def attention_scores(
     return scores
 ```
 
-See the [full documentation](https://davidxswang.github.io/torchshapeflow) for supported operators and annotation syntax.
+The extension also shows hovers for shape aliases and annotated local variables
+when those contracts are present in the active file.
+
+## Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `torchShapeFlow.cliPath` | `""` | Optional path to a specific `tsf` executable. When unset, the extension uses its normal discovery order. |
+| `torchShapeFlow.runOnSave` | `true` | Run the analyzer automatically on save |
+
+## Learn more
+
+- [Full documentation](https://davidxswang.github.io/torchshapeflow)
+- [Annotation syntax](https://davidxswang.github.io/torchshapeflow/syntax/)
+- [Supported operators](https://davidxswang.github.io/torchshapeflow/operators/)
+- [GitHub repository](https://github.com/Davidxswang/torchshapeflow)

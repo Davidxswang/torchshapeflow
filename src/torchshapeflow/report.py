@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from torchshapeflow.diagnostics import Diagnostic
+
+HoverKind = Literal["value", "signature", "alias"]
 
 
 @dataclass(frozen=True)
@@ -13,6 +16,7 @@ class HoverFact:
     end_column: int
     name: str
     shape: str
+    kind: HoverKind = "value"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -22,6 +26,7 @@ class HoverFact:
             "end_column": self.end_column,
             "name": self.name,
             "shape": self.shape,
+            "kind": self.kind,
         }
 
 

@@ -2,7 +2,7 @@
   "name": "torchshapeflow",
   "displayName": "Torch Shape Flow",
   "description": "Static PyTorch tensor shape diagnostics and hover information.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "davidxswang",
   "icon": "torchshapeflow.png",
   "license": "MIT",
@@ -16,6 +16,7 @@
   },
   "files": [
     "out/**",
+    "bin/**",
     "package.json",
     "README.md",
     "LICENSE",
@@ -44,8 +45,8 @@
       "properties": {
         "torchShapeFlow.cliPath": {
           "type": "string",
-          "default": "tsf",
-          "description": "Path to the TorchShapeFlow CLI executable."
+          "default": "",
+          "description": "Optional path to a TorchShapeFlow CLI executable. When unset, the extension prefers a workspace .venv install, then the bundled CLI, then tsf on PATH."
         },
         "torchShapeFlow.runOnSave": {
           "type": "boolean",

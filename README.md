@@ -66,4 +66,11 @@ make install   # uv sync --extra dev
 make check     # format + lint + typecheck + tests
 ```
 
+If you want to execute the example PyTorch scripts in `examples/`, install the
+separate examples extra:
+
+```bash
+uv sync --extra dev --extra examples
+```
+
 See [docs/development.md](docs/development.md) for the full development guide: all make targets, CI workflow descriptions, and how to add new operators.

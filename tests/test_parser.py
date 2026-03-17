@@ -59,6 +59,20 @@ def test_parse_annotation_typing_qualified() -> None:
     assert str(result.shape) == "[B]"
 
 
+def test_parse_annotation_string_shorthand() -> None:
+    node = _expr("Annotated[torch.Tensor, 'B C H W']")
+    result = parse_tensor_annotation(node)
+    assert result is not None
+    assert str(result.shape) == "[B, C, H, W]"
+
+
+def test_parse_annotation_string_shorthand_mixed_dims() -> None:
+    node = _expr("Annotated[torch.Tensor, 'B 3 224 224']")
+    result = parse_tensor_annotation(node)
+    assert result is not None
+    assert str(result.shape) == "[B, 3, 224, 224]"
+
+
 def test_parse_annotation_not_subscript_returns_none() -> None:
     node = _expr("torch.Tensor")
     assert parse_tensor_annotation(node) is None
