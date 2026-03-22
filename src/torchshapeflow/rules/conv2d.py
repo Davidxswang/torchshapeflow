@@ -6,7 +6,7 @@ from torchshapeflow.model import (
     TensorShape,
     TensorValue,
 )
-from torchshapeflow.rules.common import spatial_output_dim
+from torchshapeflow.rules.common import spatial_output_dim, to_dim
 
 
 def infer_conv2d(spec: Conv2dSpec, tensor: TensorValue) -> TensorValue | None:
@@ -37,5 +37,5 @@ def infer_conv2d(spec: Conv2dSpec, tensor: TensorValue) -> TensorValue | None:
         spec.dilation[1],
     )
     return TensorValue(
-        TensorShape((tensor.shape.dims[0], ConstantDim(spec.out_channels), height, width))
+        TensorShape((tensor.shape.dims[0], to_dim(spec.out_channels), height, width))
     )

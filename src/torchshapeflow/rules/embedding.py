@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from torchshapeflow.model import ConstantDim, EmbeddingSpec, TensorShape, TensorValue
+from torchshapeflow.model import EmbeddingSpec, TensorShape, TensorValue
+from torchshapeflow.rules.common import to_dim
 
 
 def infer_embedding(spec: EmbeddingSpec, tensor: TensorValue) -> TensorValue:
@@ -14,4 +15,4 @@ def infer_embedding(spec: EmbeddingSpec, tensor: TensorValue) -> TensorValue:
         Output tensor with embedding_dim appended as a new trailing dimension.
         shape: (*indices, embedding_dim)
     """
-    return TensorValue(TensorShape(tensor.shape.dims + (ConstantDim(spec.embedding_dim),)))
+    return TensorValue(TensorShape(tensor.shape.dims + (to_dim(spec.embedding_dim),)))

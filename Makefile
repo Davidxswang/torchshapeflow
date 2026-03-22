@@ -1,6 +1,21 @@
 PYTHON ?= python
 
-.PHONY: install format lint typecheck test check docs docs-serve build python-dist bundle-cli extension-build extension-package extension-package-bundled bump-patch bump-minor bump-major clean
+.PHONY: help install format lint typecheck test check docs docs-serve build python-dist bundle-cli extension-build extension-package bump-patch bump-minor bump-major clean
+
+help:
+	@printf '%s\n' \
+		'Common targets:' \
+		'  make install                    Install dev dependencies' \
+		'  make check                      Format, lint, typecheck, and test' \
+		'  make build                      Build Python artifacts and a bundled VSIX' \
+		'' \
+		'Extension targets:' \
+		'  make extension-build            Build extension JS only (fast dev loop)' \
+		'  make bundle-cli                 Rebuild bundled tsf for this host' \
+		'  make extension-package          Rebuild bundled tsf, then package VSIX' \
+		'' \
+		'Version targets:' \
+		'  make bump-patch | bump-minor | bump-major'
 
 install:
 	uv sync --extra dev
@@ -25,7 +40,7 @@ docs:
 docs-serve:
 	uv run mkdocs serve
 
-build: python-dist extension-package-bundled
+build: python-dist extension-package
 
 python-dist:
 	uv build
@@ -36,10 +51,8 @@ bundle-cli:
 extension-build:
 	cd extensions/vscode && npm ci && npm run build
 
-extension-package:
+extension-package: bundle-cli
 	cd extensions/vscode && npm ci && npm run package
-
-extension-package-bundled: bundle-cli extension-package
 
 bump-patch:
 	uv run python scripts/bump_version.py patch

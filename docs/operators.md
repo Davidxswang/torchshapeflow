@@ -573,7 +573,18 @@ class Net(nn.Module):
 nn.Sequential(layer1, layer2, ...)
 ```
 
-Shape is propagated through each sub-module in order. Supported sub-module types are the same as those recognized directly (Linear, Conv2d, MaxPool2d, AvgPool2d, Embedding, passthrough activations/norms).
+Shape is propagated through each sub-module in order.
+
+Supported forms:
+
+- Literal constructor arguments such as `nn.Sequential(nn.Linear(...), nn.ReLU(), ...)`
+- Narrow loop-built stacks in `__init__`:
+  `layers = []`, `for i in range(depth): layers.append(...)`, `self.net = nn.Sequential(*layers)`
+- Project-local annotated custom `nn.Module` blocks, including imported ones, when their
+  `forward()` method has tensor shape annotations
+
+If any stage in the sequence cannot be summarized statically, the `Sequential`
+spec is dropped rather than treated as shape-preserving.
 
 ```python
 class Net(nn.Module):
@@ -586,6 +597,39 @@ class Net(nn.Module):
 
     def forward(self, x: Annotated[torch.Tensor, Shape("B", 128)]):
         y = self.net(x)   # [B, 16]
+```
+
+### `nn.LSTM`
+
+```python
+nn.LSTM(input_size, hidden_size, num_layers=1, ..., batch_first=False, bidirectional=False, proj_size=0)
+```
+
+Input: `(L, N, input_size)` when `batch_first=False`, `(N, L, input_size)` when `batch_first=True`.
+
+Return value matches PyTorch's nested tuple:
+
+- `output`: `(L, N, D*H_out)` or `(N, L, D*H_out)` when `batch_first=True`
+- `h_n`: `(D*num_layers, N, H_out)`
+- `c_n`: `(D*num_layers, N, hidden_size)`
+
+Here `D = 2` when `bidirectional=True`, else `1`, and `H_out = proj_size` when
+`proj_size > 0`, else `hidden_size`.
+
+When `input_size` is a literal constant, the trailing input dimension is checked.
+A definite mismatch emits `TSF1007`. If the trailing dimension is symbolic,
+TorchShapeFlow still infers the output shape and emits `TSF1012`.
+
+```python
+class Net(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, num_layers=2, batch_first=True)
+        self.proj = nn.Linear(256, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 128)]):
+        _, (h, c) = self.encoder(x)
+        final = h[-1]          # [B, 256]
+        y = self.proj(final)   # [B, 32]
 ```
 
 ### `nn.MultiheadAttention`

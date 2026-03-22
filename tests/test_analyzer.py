@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from torchshapeflow.analyzer import analyze_source
+from torchshapeflow.analyzer import analyze_path, analyze_source
+from torchshapeflow.index import ProjectIndex
 
 
 def test_analyze_transformer_shapes() -> None:
@@ -606,6 +608,228 @@ class Model(nn.Module):
     assert any(hover.name == "y" and hover.shape == "[B, T, 32]" for hover in report.hovers)
 
 
+# ---------------------------------------------------------------------------
+# nn.LSTM
+# ---------------------------------------------------------------------------
+
+
+def test_lstm_flat_unpack() -> None:
+    """Top-level unpack: out, state = lstm(x), then subscript the nested state tuple."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        out, state = self.encoder(x)
+        h_n = state[0]
+        c_n = state[1]
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "out" and hover.shape == "[L, N, 256]" for hover in report.hovers)
+    assert any(hover.name == "h_n" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+    assert any(hover.name == "c_n" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_nested_unpack() -> None:
+    """Nested unpack: out, (h, c) = lstm(x)."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        out, (h, c) = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "out" and hover.shape == "[L, N, 256]" for hover in report.hovers)
+    assert any(hover.name == "h" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+    assert any(hover.name == "c" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_nested_discard_pattern() -> None:
+    """Common pattern: _, (hidden, _) = lstm(x)."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, num_layers=2)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        _, (hidden, _) = self.encoder(x)
+        final = hidden[-1]
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "hidden" and hover.shape == "[2, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_batch_first() -> None:
+    """batch_first=True swaps L and N in output."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, batch_first=True)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("N", "L", 128)]):
+        out, (h, c) = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "out" and hover.shape == "[N, L, 256]" for hover in report.hovers)
+    assert any(hover.name == "h" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_bidirectional() -> None:
+    """bidirectional=True doubles output hidden dim and h_n first dim."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, bidirectional=True)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        out, (h, c) = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "out" and hover.shape == "[L, N, 512]" for hover in report.hovers)
+    assert any(hover.name == "h" and hover.shape == "[2, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_chained_linear() -> None:
+    """LSTM output fed into a Linear layer."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, num_layers=2, batch_first=True)
+        self.head = nn.Linear(256, 10)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("N", "L", 128)]):
+        _, (hidden, _) = self.encoder(x)
+        final_hidden = hidden[-1]
+        return self.head(final_hidden)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "hidden" and hover.shape == "[2, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_state_subscript_preserves_nested_tuple_structure() -> None:
+    """Indexing lstm(x)[1][0] should recover h_n, not flatten the state tuple."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        state = self.encoder(x)[1]
+        h = state[0]
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert not any(hover.name == "state" for hover in report.hovers)
+    assert any(hover.name == "h" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_input_size_mismatch_reports_tsf1007() -> None:
+    """Definite trailing-dim mismatches should fail for nn.LSTM."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 64)]):
+        out, _ = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert any(d.code == "TSF1007" and "nn.LSTM" in d.message for d in report.diagnostics)
+
+
+def test_lstm_symbolic_input_size_emits_tsf1012() -> None:
+    """Symbolic trailing dims should warn when nn.LSTM expects a literal input_size."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", "D")]):
+        out, _ = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF1012"]
+    assert len(warnings) == 1
+    assert "nn.LSTM expects input_size=128" in warnings[0].message
+    assert any(hover.name == "out" and hover.shape == "[L, N, 256]" for hover in report.hovers)
+
+
+def test_lstm_proj_size_shapes() -> None:
+    """proj_size changes output and h_n while c_n keeps hidden_size."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.encoder = nn.LSTM(128, 256, proj_size=64)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("L", "N", 128)]):
+        out, (h, c) = self.encoder(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.severity == "error" for d in report.diagnostics)
+    assert any(hover.name == "out" and hover.shape == "[L, N, 64]" for hover in report.hovers)
+    assert any(hover.name == "h" and hover.shape == "[1, N, 64]" for hover in report.hovers)
+    assert any(hover.name == "c" and hover.shape == "[1, N, 256]" for hover in report.hovers)
+
+
 def test_tensor_method_mm() -> None:
     """x.mm(y) tensor method form should work like torch.mm."""
     source = """
@@ -996,7 +1220,8 @@ def f(x: Annotated[torch.Tensor, Shape("B", 3, 32, 32)]):
 # ---------------------------------------------------------------------------
 
 
-def test_init_param_default_resolves_linear() -> None:
+def test_init_param_variable_out_features_becomes_symbolic() -> None:
+    """Variable out_features captured as SymbolicDim regardless of default value."""
     source = """
 from typing import Annotated
 import torch
@@ -1014,10 +1239,12 @@ class Net(nn.Module):
     assert report.diagnostics == []
     hover = next((h for h in report.hovers if h.name == "<return>"), None)
     assert hover is not None
-    assert hover.shape == "[B, 32]"
+    # out_dim is a variable name — captured as SymbolicDim("out_dim"), not resolved to 32.
+    assert hover.shape == "[B, out_dim]"
 
 
-def test_init_param_no_default_drops_spec() -> None:
+def test_init_param_no_default_still_infers_symbolic() -> None:
+    """Variable out_dim with no default still produces a symbolic output dim."""
     source = """
 from typing import Annotated
 import torch
@@ -1032,9 +1259,10 @@ class Net(nn.Module):
         return self.linear(x)
 """
     report = analyze_source(source, Path("f.py"))
-    # out_dim has no default, so linear spec is dropped — no hover for return.
-    return_hovers = [h for h in report.hovers if h.name == "<return>"]
-    assert len(return_hovers) == 0
+    # out_dim has no default but is a valid variable name — spec is created with SymbolicDim.
+    hover = next((h for h in report.hovers if h.name == "<return>"), None)
+    assert hover is not None
+    assert hover.shape == "[B, out_dim]"
 
 
 def test_init_param_mixed_literal_and_param() -> None:
@@ -1055,7 +1283,8 @@ class Net(nn.Module):
     assert report.diagnostics == []
     hover = next((h for h in report.hovers if h.name == "<return>"), None)
     assert hover is not None
-    assert hover.shape == "[B, 128]"
+    # hidden is a variable name — captured as SymbolicDim("hidden"), not resolved to 128.
+    assert hover.shape == "[B, hidden]"
 
 
 # ---------------------------------------------------------------------------
@@ -1557,3 +1786,543 @@ def fn(x: Annotated[torch.Tensor, Shape("B", "T")]):
     errors = [d for d in report.diagnostics if d.code == "TSF1008"]
     assert len(errors) == 1
     assert "movedim" in errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# TSF1012 — symbolic dim used where constant is required
+# ---------------------------------------------------------------------------
+
+
+def test_tsf1012_linear_symbolic_last_dim() -> None:
+    """TSF1012 warning when symbolic dim is passed as in_features to nn.Linear."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.fc = nn.Linear(768, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", "D")]):
+        y = self.fc(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF1012"]
+    assert len(warnings) == 1
+    assert "D" in warnings[0].message
+    assert "768" in warnings[0].message
+    assert warnings[0].severity == "warning"
+    # Inference still produces a result despite the warning.
+    assert any(hover.name == "y" and hover.shape == "[B, T, 256]" for hover in report.hovers)
+
+
+def test_tsf1012_conv2d_symbolic_channel_dim() -> None:
+    """TSF1012 warning when symbolic channel dim is passed as in_channels to nn.Conv2d."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.conv = nn.Conv2d(3, 16, 3, padding=1)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "C", "H", "W")]):
+        y = self.conv(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    warnings = [d for d in report.diagnostics if d.code == "TSF1012"]
+    assert len(warnings) == 1
+    assert "C" in warnings[0].message
+    assert "3" in warnings[0].message
+    assert warnings[0].severity == "warning"
+    # Inference still produces a result despite the warning (no TSF1007 mismatch error).
+    assert not any(d.code == "TSF1007" for d in report.diagnostics)
+    assert any(hover.name == "y" and "16" in hover.shape for hover in report.hovers)
+
+
+def test_tsf1012_no_warning_when_constant_matches() -> None:
+    """No TSF1012 when the constant dim matches the required value."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self):
+        self.conv = nn.Conv2d(3, 16, 3, padding=1)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", 3, "H", "W")]):
+        y = self.conv(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.code == "TSF1012" for d in report.diagnostics)
+
+
+def test_tsf1012_no_warning_in_unannotated_function() -> None:
+    """No TSF1012 outside of annotated functions (no active shape contract)."""
+    source = """
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self):
+        self.fc = nn.Linear(768, 256)
+
+    def forward(self, x):
+        y = self.fc(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert not any(d.code == "TSF1012" for d in report.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# shape tuple unpacking:  a, b, c, d = x.shape
+# ---------------------------------------------------------------------------
+
+
+def test_shape_unpack_constant_dims() -> None:
+    """Unpacking a shape with all constant dims seeds known integer values."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(2, 4, 8)]):
+    a, b, c = x.shape
+    y = x.reshape(a, b * c)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "y" and hover.shape == "[2, 32]" for hover in report.hovers)
+
+
+def test_shape_unpack_symbolic_dims() -> None:
+    """Unpacking a shape with symbolic dims binds variable names as symbolic dims."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T", "N", "F")]):
+    batch_size, lookback, num_counties, num_features = x.shape
+    x_flat = x.reshape(batch_size, lookback, num_counties * num_features)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(hover.name == "x_flat" and hover.shape == "[B, T, N*F]" for hover in report.hovers)
+
+
+def test_shape_unpack_partial() -> None:
+    """Fewer unpack targets than shape dims — only the named variables are bound."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape("B", 16, 32)]):
+    batch, channels = x.shape
+    y = x.reshape(batch, channels * 32)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    # channels=16, 32 is literal — product is 512; batch is the original dim B
+    assert any(hover.name == "y" and hover.shape == "[B, 512]" for hover in report.hovers)
+
+
+# ---------------------------------------------------------------------------
+# Feature: self.attr scalar tracking from __init__
+# ---------------------------------------------------------------------------
+
+
+def test_self_attr_in_reshape() -> None:
+    """self.xxx = init_param in __init__ makes self.xxx usable as reshape dim."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self, horizon: int, counties: int):
+        self.horizon = horizon
+        self.counties = counties
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "horizon_counties")]):
+        batch_size, _ = x.shape
+        return x.reshape(batch_size, self.horizon, self.counties)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    hover = next((h for h in report.hovers if h.name == "<return>"), None)
+    assert hover is not None
+    assert hover.shape == "[B, horizon, counties]"
+
+
+def test_binop_out_features_in_linear() -> None:
+    """nn.Linear with a Name*Name output dim captures it as an expression."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self, hidden: int, horizon: int, counties: int):
+        self.proj = nn.Linear(hidden, horizon * counties)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "hidden")]):
+        return self.proj(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    hover = next((h for h in report.hovers if h.name == "<return>"), None)
+    assert hover is not None
+    assert hover.shape == "[B, horizon*counties]"
+
+
+def test_self_attr_and_binop_combined() -> None:
+    """LSTM → Linear(binop) → reshape(self.attr) full trace."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+class Model(nn.Module):
+    def __init__(self, hidden: int, horizon: int, counties: int):
+        self.horizon = horizon
+        self.counties = counties
+        self.encoder = nn.LSTM(input_size=64, hidden_size=hidden, batch_first=True)
+        self.head = nn.Linear(hidden, horizon * counties)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 64)]):
+        _, (h, _) = self.encoder(x)
+        final = h[-1]
+        out = self.head(final)
+        batch_size, _ = out.shape
+        return out.reshape(batch_size, self.horizon, self.counties)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    hover = next((h for h in report.hovers if h.name == "<return>"), None)
+    assert hover is not None
+    assert hover.shape == "[B, horizon, counties]"
+
+
+def test_init_tensor_param_hover() -> None:
+    """Annotated tensor params in __init__ should produce hovers and a signature."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self, adjacency: Annotated[torch.Tensor, "N N"]):
+        self.register_buffer("adjacency", adjacency)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    adjacency_hover = next((h for h in report.hovers if h.name == "adjacency"), None)
+    assert adjacency_hover is not None
+    assert adjacency_hover.shape == "[N, N]"
+    signature_hover = next((h for h in report.hovers if h.name == "__init__"), None)
+    assert signature_hover is not None
+    assert signature_hover.shape == "(adjacency: [N, N])"
+    assert signature_hover.kind == "signature"
+
+
+def test_register_buffer_tracks_tensor_self_attr() -> None:
+    """register_buffer(name, tensor) should make self.name available as a tensor later."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self, adjacency: Annotated[torch.Tensor, "N N"]):
+        self.register_buffer("adjacency", adjacency.to(dtype=torch.float32))
+
+    def forward(self, x: Annotated[torch.Tensor, "B N F"]):
+        a = self.adjacency
+        y = torch.matmul(self.adjacency, x)
+        return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    adjacency_hovers = [h for h in report.hovers if h.name == "adjacency"]
+    assert adjacency_hovers
+    assert any(h.shape == "[N, N]" for h in adjacency_hovers)
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, N, F]"
+
+
+def test_direct_tensor_self_attr_tracks_later_use() -> None:
+    """self.attr = tensor_expr in __init__ should make self.attr available later."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self, adjacency: Annotated[torch.Tensor, "N N"]):
+        self.adjacency = adjacency.to(dtype=torch.float32)
+
+    def forward(self, x: Annotated[torch.Tensor, "B N F"]):
+        y = torch.matmul(self.adjacency, x)
+        return y
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    assert any(h.name == "adjacency" and h.shape == "[N, N]" for h in report.hovers)
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, N, F]"
+
+
+def test_loop_built_sequential_from_positive_depth() -> None:
+    """A loop-built Sequential with a positive symbolic depth should be summarized."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self, depth: int):
+        if depth <= 0:
+            raise ValueError("depth must be positive")
+        layers = []
+        for layer_idx in range(depth):
+            in_dim = 64 if layer_idx == 0 else 32
+            layers.append(nn.Linear(in_dim, 32))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: Annotated[torch.Tensor, "B 64"]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, 32]"
+
+
+def test_loop_built_sequential_from_annotated_empty_list() -> None:
+    """Annotated empty-list initialization should still seed the loop-built Sequential summary."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Model(nn.Module):
+    def __init__(self, depth: int):
+        if depth <= 0:
+            raise ValueError("depth must be positive")
+        layers: list[nn.Module] = []
+        for layer_idx in range(depth):
+            in_dim = 64 if layer_idx == 0 else 32
+            layers.append(nn.Linear(in_dim, 32))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: Annotated[torch.Tensor, "B 64"]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, 32]"
+
+
+def test_unresolved_starred_sequential_does_not_fall_back_to_identity() -> None:
+    """Unknown starred Sequential contents should lose inference rather than act like identity."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+def build_layers():
+    return []
+
+class Model(nn.Module):
+    def __init__(self):
+        layers = build_layers()
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: Annotated[torch.Tensor, "B 64"]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert any(d.code == "TSF2003" and "self.net" in d.message for d in report.diagnostics)
+    assert not any(h.name == "y" for h in report.hovers)
+
+
+def test_custom_module_forward_signature_used_for_self_call() -> None:
+    """Annotated custom nn.Module.forward should seed the spec for self.block(x)."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class GraphLayer(nn.Module):
+    def __init__(self, input_feature_dim: int, hidden_dim: int):
+        self.linear = nn.Linear(input_feature_dim, hidden_dim)
+
+    def forward(
+        self,
+        x: Annotated[torch.Tensor, "B N input_feature_dim"],
+    ) -> Annotated[torch.Tensor, "B N hidden_dim"]:
+        return self.linear(x)
+
+class Model(nn.Module):
+    def __init__(self):
+        self.block = GraphLayer(64, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, "B N 64"]):
+        y = self.block(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, N, 32]"
+
+
+def test_imported_custom_module_forward_signature_used_for_self_call() -> None:
+    """Project-local imported custom modules should contribute a forward shape contract."""
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "blocks.py").write_text(
+            """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Block(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int):
+        self.linear = nn.Linear(in_dim, out_dim)
+
+    def forward(
+        self,
+        x: Annotated[torch.Tensor, "B in_dim"],
+    ) -> Annotated[torch.Tensor, "B out_dim"]:
+        return self.linear(x)
+""",
+            encoding="utf-8",
+        )
+        (root / "model.py").write_text(
+            """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from blocks import Block
+
+class Model(nn.Module):
+    def __init__(self):
+        self.block = Block(64, 32)
+
+    def forward(self, x: Annotated[torch.Tensor, "B 64"]):
+        y = self.block(x)
+""",
+            encoding="utf-8",
+        )
+        report = analyze_path(root / "model.py", ProjectIndex())
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, 32]"
+
+
+def test_imported_custom_modules_in_loop_built_sequential() -> None:
+    """Imported project-local custom modules should work inside loop-built Sequential."""
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "blocks.py").write_text(
+            """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class Block(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int):
+        self.linear = nn.Linear(in_dim, out_dim)
+
+    def forward(
+        self,
+        x: Annotated[torch.Tensor, "B in_dim"],
+    ) -> Annotated[torch.Tensor, "B out_dim"]:
+        return self.linear(x)
+""",
+            encoding="utf-8",
+        )
+        (root / "model.py").write_text(
+            """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from blocks import Block
+
+class Model(nn.Module):
+    def __init__(self, depth: int, hidden_dim: int = 32):
+        if depth <= 0:
+            raise ValueError("depth must be positive")
+        layers: list[nn.Module] = []
+        for layer_idx in range(depth):
+            in_dim = 64 if layer_idx == 0 else hidden_dim
+            layers.append(Block(in_dim, hidden_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: Annotated[torch.Tensor, "B 64"]):
+        y = self.net(x)
+""",
+            encoding="utf-8",
+        )
+        report = analyze_path(root / "model.py", ProjectIndex())
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, hidden_dim]"
+
+
+def test_loop_built_sequential_of_custom_modules() -> None:
+    """Loop-built Sequential should preserve custom module specs when forward is annotated."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+
+class GraphLayer(nn.Module):
+    def __init__(self, input_feature_dim: int, hidden_dim: int, dropout: float = 0.1):
+        self.linear = nn.Linear(input_feature_dim, hidden_dim)
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        x: Annotated[torch.Tensor, "B N input_feature_dim"],
+    ) -> Annotated[torch.Tensor, "B N hidden_dim"]:
+        return self.dropout(self.activation(self.linear(x)))
+
+class Model(nn.Module):
+    def __init__(self, depth: int, hidden_dim: int = 32):
+        if depth <= 0:
+            raise ValueError("depth must be positive")
+        layers = []
+        for layer_idx in range(depth):
+            in_dim = 64 if layer_idx == 0 else hidden_dim
+            layers.append(GraphLayer(in_dim, hidden_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: Annotated[torch.Tensor, "B N 64"]):
+        y = self.net(x)
+"""
+    report = analyze_source(source, Path("f.py"))
+    assert report.diagnostics == []
+    y_hover = next((h for h in report.hovers if h.name == "y"), None)
+    assert y_hover is not None
+    assert y_hover.shape == "[B, N, hidden_dim]"

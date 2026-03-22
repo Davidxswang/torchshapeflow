@@ -51,7 +51,6 @@ make check
 make python-dist
 make bundle-cli
 make extension-package
-make extension-package-bundled
 make build
 ```
 

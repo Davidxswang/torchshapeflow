@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from torchshapeflow.model import ConstantDim, LinearSpec, TensorShape, TensorValue
+from torchshapeflow.rules.common import to_dim
 
 
 def infer_linear(spec: LinearSpec, tensor: TensorValue) -> TensorValue | None:
@@ -17,5 +18,5 @@ def infer_linear(spec: LinearSpec, tensor: TensorValue) -> TensorValue | None:
         if last_dim != ConstantDim(spec.in_features):
             return None
     dims = list(tensor.shape.dims[:-1])
-    dims.append(ConstantDim(spec.out_features))
+    dims.append(to_dim(spec.out_features))
     return TensorValue(TensorShape(tuple(dims)))

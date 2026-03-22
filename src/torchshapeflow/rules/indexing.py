@@ -73,6 +73,12 @@ def infer_subscript(
             step_is_one = slice_node.step is None or (
                 isinstance(slice_node.step, ast.Constant) and slice_node.step.value == 1
             )
+            # Full slice [:] has all None bounds.
+            if slice_node.lower is None and slice_node.upper is None and step_is_one:
+                output.append(dims[position])
+                position += 1
+                continue
+
             lower_val = 0 if slice_node.lower is None else int_from_ast(slice_node.lower)
             upper_val = int_from_ast(slice_node.upper) if slice_node.upper is not None else None
             current_dim = dims[position]

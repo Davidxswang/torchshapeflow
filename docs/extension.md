@@ -47,11 +47,13 @@ The extension requires VS Code ≥ 1.90 or a compatible Cursor version.
 ```bash
 make extension-build            # development build (faster, no .vsix)
 make bundle-cli                 # build a bundled CLI for the current host
-make extension-package          # package the current extension state into a .vsix
-make extension-package-bundled  # build the host bundled CLI, then package the .vsix
+make extension-package          # rebuild the host bundled CLI, then package the .vsix
 ```
 
 Requires Node.js ≥ 24 and `npm`.
+
+`make extension-package` is the normal local packaging command. It rebuilds the
+bundled host `tsf` first so the VSIX reflects the latest analyzer code.
 
 ## Release and marketplace publishing
 
@@ -73,6 +75,8 @@ full release steps.
 - Imported shape aliases and annotated helper functions in project-local files
   can still affect inference for the active file, because the CLI builds a
   project index during each check.
+- Imported annotated custom `nn.Module` blocks in project-local files can also
+  contribute shape contracts for `self.block(...)` calls in the active file.
 - Local shape aliases and annotated local variables are reflected in diagnostics
   and hovers, but only within the active file's analysis pass.
 - There is no workspace-wide background analysis or long-lived project state;

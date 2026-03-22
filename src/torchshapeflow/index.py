@@ -22,12 +22,22 @@ class FuncSig:
     return_shape: TensorValue | None
 
 
+@dataclass(frozen=True)
+class CustomModuleTemplate:
+    """Shape contract for an annotated custom nn.Module.forward."""
+
+    init_param_names: tuple[str, ...]
+    input_shape: TensorValue | None
+    return_shape: TensorValue | None
+
+
 @dataclass
 class FileData:
     """Shape-relevant exports extracted from a single Python file."""
 
     aliases: dict[str, TensorValue] = field(default_factory=dict)
     func_sigs: dict[str, FuncSig] = field(default_factory=dict)
+    custom_module_templates: dict[str, CustomModuleTemplate] = field(default_factory=dict)
 
 
 class ProjectIndex:
@@ -80,6 +90,7 @@ def build_file_data(
 
     imported_aliases: dict[str, TensorValue] = {}
     imported_funcs: dict[str, FuncSig] = {}
+    imported_templates: dict[str, CustomModuleTemplate] = {}
     if project_index is not None:
         for local_name, (module_name, original_name) in import_map.items():
             src_path = project_index.resolve_import(module_name, path)
@@ -89,6 +100,10 @@ def build_file_data(
                     imported_aliases[local_name] = file_data.aliases[original_name]
                 if original_name in file_data.func_sigs:
                     imported_funcs[local_name] = file_data.func_sigs[original_name]
+                if original_name in file_data.custom_module_templates:
+                    imported_templates[local_name] = file_data.custom_module_templates[
+                        original_name
+                    ]
 
     all_aliases = resolve_aliases(raw_aliases, imported_aliases)
 
@@ -99,7 +114,14 @@ def build_file_data(
             if sig is not None:
                 func_sigs[node.name] = sig
 
-    return FileData(aliases=all_aliases, func_sigs=func_sigs)
+    custom_module_templates = dict(imported_templates)
+    custom_module_templates.update(extract_custom_module_templates(module, all_aliases))
+
+    return FileData(
+        aliases=all_aliases,
+        func_sigs=func_sigs,
+        custom_module_templates=custom_module_templates,
+    )
 
 
 def unify_dims(declared: tuple[Dim, ...], actual: tuple[Dim, ...]) -> dict[str, Dim]:
@@ -150,9 +172,11 @@ def extract_alias_binding(statement: ast.stmt) -> tuple[str, ast.AST] | None:
         and _qualified_name(statement.annotation) in _TYPE_ALIAS_NAMES
     ):
         return statement.target.id, statement.value
-    if hasattr(ast, "TypeAlias") and isinstance(statement, ast.TypeAlias):
-        if isinstance(statement.name, ast.Name):
-            return statement.name.id, statement.value
+    alias_name = _type_alias_name_node(statement)
+    if alias_name is not None:
+        value = getattr(statement, "value", None)
+        if isinstance(value, ast.AST):
+            return alias_name.id, value
     return None
 
 
@@ -250,6 +274,38 @@ def extract_func_sig(func: ast.FunctionDef, aliases: dict[str, TensorValue]) -> 
     return FuncSig(param_shapes=tuple(param_shapes), return_shape=return_shape)
 
 
+def extract_custom_module_templates(
+    module: ast.Module, aliases: dict[str, TensorValue]
+) -> dict[str, CustomModuleTemplate]:
+    """Extract annotated custom-module forward contracts from a module."""
+    templates: dict[str, CustomModuleTemplate] = {}
+    for node in module.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        init_param_names: tuple[str, ...] = ()
+        input_shape: TensorValue | None = None
+        return_shape: TensorValue | None = None
+        for child in node.body:
+            if not isinstance(child, ast.FunctionDef):
+                continue
+            if child.name == "__init__":
+                init_param_names = tuple(arg.arg for arg in child.args.args if arg.arg != "self")
+                continue
+            if child.name != "forward":
+                continue
+            sig = extract_func_sig(child, aliases)
+            if sig is not None:
+                input_shape = next((shape for shape in sig.param_shapes if shape is not None), None)
+                return_shape = sig.return_shape
+        if input_shape is not None or return_shape is not None:
+            templates[node.name] = CustomModuleTemplate(
+                init_param_names=init_param_names,
+                input_shape=input_shape,
+                return_shape=return_shape,
+            )
+    return templates
+
+
 def _index_file(path: Path, project_index: ProjectIndex) -> FileData:
     try:
         source = path.read_text(encoding="utf-8")
@@ -288,3 +344,11 @@ def _qualified_name(node: ast.AST) -> str:
             return node.attr
         return f"{base}.{node.attr}"
     return ""
+
+
+def _type_alias_name_node(statement: ast.stmt) -> ast.Name | None:
+    type_alias_cls = getattr(ast, "TypeAlias", None)
+    if type_alias_cls is None or not isinstance(statement, type_alias_cls):
+        return None
+    name = getattr(statement, "name", None)
+    return name if isinstance(name, ast.Name) else None

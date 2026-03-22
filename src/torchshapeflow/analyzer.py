@@ -7,38 +7,46 @@ from pathlib import Path
 
 from torchshapeflow.diagnostics import Diagnostic, Severity
 from torchshapeflow.index import (
+    CustomModuleTemplate,
     FuncSig,
     ProjectIndex,
     apply_substitution,
     build_file_data,
     extract_alias_binding,
+    extract_func_sig,
     unify_dims,
 )
 from torchshapeflow.model import (
     ConstantDim,
     Conv2dSpec,
+    CustomModuleSpec,
     Dim,
     EmbeddingSpec,
     ExpressionDim,
     IntegerValue,
     LinearSpec,
+    LSTMSpec,
     ModuleSpec,
     MultiheadAttentionSpec,
     PassthroughSpec,
     Pool2dSpec,
+    RepeatSpec,
     SequentialSpec,
     ShapeTupleValue,
     SymbolicDim,
     TensorShape,
     TensorTupleValue,
     TensorValue,
+    TupleValue,
     UnknownDim,
     Value,
     broadcast_has_uncertain_dims,
     make_dim,
     normalize_index,
     product_dim,
+    quotient_dim,
     render_dim,
+    sum_dim,
 )
 from torchshapeflow.parser import AnnotationParseError, parse_source, parse_tensor_annotation
 from torchshapeflow.report import FileReport, HoverFact
@@ -54,6 +62,7 @@ from torchshapeflow.rules import (
     infer_index_select,
     infer_interpolate,
     infer_linear,
+    infer_lstm,
     infer_matmul,
     infer_mm,
     infer_movedim,
@@ -254,8 +263,11 @@ _MODULE_SPEC_TYPES = (
     PassthroughSpec,
     EmbeddingSpec,
     Pool2dSpec,
+    CustomModuleSpec,
+    RepeatSpec,
     SequentialSpec,
     MultiheadAttentionSpec,
+    LSTMSpec,
 )
 
 
@@ -269,6 +281,12 @@ class ModuleContext:
     return_shape: TensorValue | None = None
     collected_returns: list[TensorValue | None] = field(default_factory=list)
     in_annotated_function: bool = False
+    # Scalar self.attr values from __init__ (e.g. self.hidden = hidden_dim → SymbolicDim).
+    self_scalars: dict[str, Dim] = field(default_factory=dict)
+    # Tensor self.attr values captured from __init__ (e.g. register_buffer or direct assignment).
+    self_tensors: dict[str, TensorValue] = field(default_factory=dict)
+    # Method signatures for the current class being analyzed.
+    method_sigs: dict[str, FuncSig] = field(default_factory=dict)
 
     def error(
         self,
@@ -333,43 +351,117 @@ def analyze_source(
     file_data = build_file_data(module, path, project_index)
     context = ModuleContext(path=path, aliases=file_data.aliases, func_sigs=file_data.func_sigs)
     _emit_module_alias_hovers(module, context)
-    class_specs = _collect_class_specs(module)
+    class_specs, class_scalars, class_tensors = _collect_class_specs(
+        module, context, file_data.custom_module_templates
+    )
     for node in module.body:
         if isinstance(node, ast.FunctionDef):
             _analyze_function(node, context, {})
         elif isinstance(node, ast.ClassDef):
             specs = class_specs.get(node.name, {})
+            context.self_scalars = class_scalars.get(node.name, {})
+            context.self_tensors = class_tensors.get(node.name, {})
+            # Pass 1: Collect method signatures for self.method() lookups.
+            context.method_sigs = {}
             for child in node.body:
-                if isinstance(child, ast.FunctionDef) and child.name == "forward":
-                    _analyze_function(child, context, specs)
+                if isinstance(child, ast.FunctionDef):
+                    sig = extract_func_sig(child, context.aliases)
+                    if sig is not None:
+                        context.method_sigs[child.name] = sig
+            # Pass 2: Analyze all methods (except __init__ which is handled in specs).
+            for child in node.body:
+                if not isinstance(child, ast.FunctionDef):
+                    continue
+                if child.name == "__init__":
+                    _emit_function_annotation_hovers(child, context)
+                    continue
+                _analyze_function(child, context, specs)
+            context.method_sigs = {}
+            context.self_scalars = {}
+            context.self_tensors = {}
     return FileReport(path=str(path), diagnostics=context.diagnostics, hovers=context.hovers)
 
 
 def _collect_class_specs(
     module: ast.Module,
-) -> dict[str, dict[str, ModuleSpec]]:
+    context: ModuleContext,
+    custom_module_templates: dict[str, CustomModuleTemplate],
+) -> tuple[
+    dict[str, dict[str, ModuleSpec]],
+    dict[str, dict[str, Dim]],
+    dict[str, dict[str, TensorValue]],
+]:
     specs: dict[str, dict[str, ModuleSpec]] = {}
+    scalars: dict[str, dict[str, Dim]] = {}
+    tensors: dict[str, dict[str, TensorValue]] = {}
     for node in module.body:
         if not isinstance(node, ast.ClassDef):
             continue
         class_specs: dict[str, ModuleSpec] = {}
+        class_scalars: dict[str, Dim] = {}
+        class_tensors: dict[str, TensorValue] = {}
         for child in node.body:
             if isinstance(child, ast.FunctionDef) and child.name == "__init__":
-                init_params = _collect_init_param_defaults(child)
+                init_env, _, _, _ = _collect_function_annotations(child, context, emit_hovers=False)
+                positive_params = _collect_positive_scalar_params(child)
+                sequence_specs: dict[str, SequentialSpec] = {}
                 for statement in child.body:
                     if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
                         target = statement.targets[0]
+                        if (
+                            isinstance(target, ast.Name)
+                            and isinstance(statement.value, ast.List)
+                            and len(statement.value.elts) == 0
+                        ):
+                            sequence_specs[target.id] = SequentialSpec(specs=())
+                            continue
                         if (
                             isinstance(target, ast.Attribute)
                             and isinstance(target.value, ast.Name)
                             and target.value.id == "self"
                         ):
-                            spec = _parse_module_spec(statement.value, init_params)
+                            spec = _parse_module_spec(
+                                statement.value, sequence_specs, custom_module_templates
+                            )
                             if spec is not None:
                                 class_specs[target.attr] = spec
+                            else:
+                                tensor_value = _init_tensor_from_expr(statement.value, init_env)
+                                if tensor_value is not None:
+                                    class_tensors[target.attr] = tensor_value
+                            if isinstance(statement.value, ast.Name):
+                                # self.attr = variable_name → track as SymbolicDim
+                                class_scalars[target.attr] = SymbolicDim(statement.value.id)
+                        elif isinstance(target, ast.Name):
+                            value = _init_tensor_from_expr(statement.value, init_env)
+                            if value is not None:
+                                init_env[target.id] = value
+                    elif (
+                        isinstance(statement, ast.AnnAssign)
+                        and isinstance(statement.target, ast.Name)
+                        and isinstance(statement.value, ast.List)
+                        and len(statement.value.elts) == 0
+                    ):
+                        sequence_specs[statement.target.id] = SequentialSpec(specs=())
+                    elif isinstance(statement, ast.For):
+                        sequence_binding = _loop_sequence_binding(
+                            statement, sequence_specs, positive_params, custom_module_templates
+                        )
+                        if sequence_binding is not None:
+                            name, spec = sequence_binding
+                            sequence_specs[name] = spec
+                    elif _is_register_buffer_call(statement):
+                        buffer = _register_buffer_binding(statement, init_env)
+                        if buffer is not None:
+                            name, tensor_value = buffer
+                            class_tensors[name] = tensor_value
         if class_specs:
             specs[node.name] = class_specs
-    return specs
+        if class_scalars:
+            scalars[node.name] = class_scalars
+        if class_tensors:
+            tensors[node.name] = class_tensors
+    return specs, scalars, tensors
 
 
 def _emit_module_alias_hovers(module: ast.Module, context: ModuleContext) -> None:
@@ -384,54 +476,52 @@ def _emit_module_alias_hovers(module: ast.Module, context: ModuleContext) -> Non
             context.hover_alias(alias_name, target, tensor)
 
 
-def _collect_init_param_defaults(func: ast.FunctionDef) -> dict[str, int]:
-    """Extract integer default values from ``__init__`` parameters.
-
-    Python aligns defaults right-to-left with parameters, so ``def f(a, b=1, c=2)``
-    has ``args.args = [a, b, c]`` and ``args.defaults = [1, 2]``.
-    """
-    params: dict[str, int] = {}
-    args = func.args
-    n_defaults = len(args.defaults)
-    n_args = len(args.args)
-    for i, default in enumerate(args.defaults):
-        arg = args.args[n_args - n_defaults + i]
-        val = int_from_ast(default)
-        if val is not None:
-            params[arg.arg] = val
-    return params
-
-
-def _int_from_ast_with_params(node: ast.AST, init_params: dict[str, int] | None) -> int | None:
-    """Try ``int_from_ast`` first, then fall back to ``__init__`` parameter defaults."""
-    val = int_from_ast(node)
-    if val is not None:
-        return val
-    if init_params and isinstance(node, ast.Name) and node.id in init_params:
-        return init_params[node.id]
-    return None
-
-
 def _parse_module_spec(
     node: ast.AST,
-    init_params: dict[str, int] | None = None,
+    sequence_specs: dict[str, SequentialSpec] | None = None,
+    custom_module_templates: dict[str, CustomModuleTemplate] | None = None,
 ) -> ModuleSpec | None:
+    if isinstance(node, ast.Name) and sequence_specs is not None:
+        return sequence_specs.get(node.id)
     if not isinstance(node, ast.Call):
         return None
     name = qualified_name(node.func)
     short_name = name.split(".")[-1]
 
     def _int(n: ast.AST) -> int | None:
-        return _int_from_ast_with_params(n, init_params)
+        """Resolve a literal integer from an AST node (input/validation dims only)."""
+        return int_from_ast(n)
+
+    def _sym(n: ast.AST) -> int | str | None:
+        """Resolve an output dim: literal int, variable name, or simple Name op Name expr."""
+        val = int_from_ast(n)
+        if val is not None:
+            return val
+        if isinstance(n, ast.Name):
+            return n.id
+        if isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Mult, ast.Add, ast.Sub)):
+            left = _sym(n.left)
+            right = _sym(n.right)
+            if left is not None and right is not None:
+                if isinstance(left, int) and isinstance(right, int):
+                    return left  # already handled by int_from_ast; unreachable in practice
+                if isinstance(n.op, ast.Mult):
+                    op_str = "*"
+                elif isinstance(n.op, ast.Add):
+                    op_str = "+"
+                else:
+                    op_str = "-"
+                return f"{left}{op_str}{right}"
+        return None
 
     if name.endswith("Linear") and len(node.args) >= 2:
         in_features = _int(node.args[0])  # may be None (non-literal)
-        out_features = _int(node.args[1])
+        out_features = _sym(node.args[1])
         if out_features is not None:
             return LinearSpec(in_features=in_features, out_features=out_features)
     if name.endswith("Conv2d") and len(node.args) >= 3:
         in_channels = _int(node.args[0])  # may be None (non-literal)
-        out_channels = _int(node.args[1])
+        out_channels = _sym(node.args[1])
         kernel_size = _int_pair(node.args[2])
         stride = _int_pair(_keyword_or_default(node, "stride"), default=(1, 1))
         padding = _int_pair(_keyword_or_default(node, "padding"), default=(0, 0))
@@ -451,7 +541,7 @@ def _parse_module_spec(
                 dilation=dilation,
             )
     if short_name == "Embedding" and len(node.args) >= 2:
-        embedding_dim = _int(node.args[1])
+        embedding_dim = _sym(node.args[1])
         if embedding_dim is not None:
             return EmbeddingSpec(embedding_dim=embedding_dim)
     if name.endswith("MaxPool2d") and node.args:
@@ -478,10 +568,18 @@ def _parse_module_spec(
     if short_name == "Sequential":
         sub_specs: list[ModuleSpec] = []
         for arg in node.args:
-            sub = _parse_module_spec(arg, init_params)
-            if sub is not None:
-                sub_specs.append(sub)
+            sub_node = arg.value if isinstance(arg, ast.Starred) else arg
+            sub = _parse_module_spec(sub_node, sequence_specs, custom_module_templates)
+            if sub is None:
+                return None
+            sub_specs.append(sub)
         return SequentialSpec(specs=tuple(sub_specs))
+    if short_name == "ModuleList" and len(node.args) == 1:
+        return _parse_module_spec(node.args[0], sequence_specs, custom_module_templates)
+    if custom_module_templates is not None:
+        template = custom_module_templates.get(short_name)
+        if template is not None:
+            return _bind_custom_module_template(node, template)
     if short_name == "MultiheadAttention" and len(node.args) >= 2:
         embed_dim = _int(node.args[0])
         num_heads = _int(node.args[1])
@@ -493,7 +591,281 @@ def _parse_module_spec(
             return MultiheadAttentionSpec(
                 embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first
             )
+    if short_name == "LSTM" and (len(node.args) >= 2 or _keyword_or_default(node, "hidden_size")):
+        input_size_node = (
+            node.args[0] if len(node.args) >= 1 else _keyword_or_default(node, "input_size")
+        )
+        hidden_size_node = (
+            node.args[1] if len(node.args) >= 2 else _keyword_or_default(node, "hidden_size")
+        )
+        if hidden_size_node is None:
+            return None
+        input_size = _int(input_size_node) if input_size_node is not None else None
+        hidden_size = _sym(hidden_size_node)
+        proj_size: int | str | None = None
+        proj_size_arg = _keyword_or_default(node, "proj_size")
+        if proj_size_arg is not None:
+            proj_size = _sym(proj_size_arg)
+        num_layers: int | str = 1
+        num_layers_arg = (
+            node.args[2] if len(node.args) >= 3 else _keyword_or_default(node, "num_layers")
+        )
+        if num_layers_arg is not None:
+            parsed = _sym(num_layers_arg)
+            if parsed is not None:
+                num_layers = parsed
+        batch_first_node = _keyword_or_default(node, "batch_first")
+        batch_first = False
+        if isinstance(batch_first_node, ast.Constant) and isinstance(batch_first_node.value, bool):
+            batch_first = batch_first_node.value
+        bidirectional_node = _keyword_or_default(node, "bidirectional")
+        bidirectional = False
+        if isinstance(bidirectional_node, ast.Constant) and isinstance(
+            bidirectional_node.value, bool
+        ):
+            bidirectional = bidirectional_node.value
+        if hidden_size is not None:
+            return LSTMSpec(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                proj_size=proj_size,
+                num_layers=num_layers,
+                batch_first=batch_first,
+                bidirectional=bidirectional,
+            )
     return None
+
+
+def _bind_custom_module_template(
+    call: ast.Call,
+    template: CustomModuleTemplate,
+) -> CustomModuleSpec:
+    mapping: dict[str, Dim] = {}
+    for index, param_name in enumerate(template.init_param_names):
+        arg_node: ast.AST | None
+        if index < len(call.args):
+            arg_node = call.args[index]
+        else:
+            arg_node = _keyword_or_default(call, param_name)
+        dim_value = _dim_symbol_from_ast(arg_node) if arg_node is not None else None
+        if dim_value is not None:
+            mapping[param_name] = make_dim(dim_value)
+
+    input_shape = _substitute_tensor_value(template.input_shape, mapping)
+    return_shape = _substitute_tensor_value(template.return_shape, mapping)
+    return CustomModuleSpec(input_shape=input_shape, return_shape=return_shape)
+
+
+def _substitute_tensor_value(
+    tensor: TensorValue | None, mapping: dict[str, Dim]
+) -> TensorValue | None:
+    if tensor is None:
+        return None
+    return TensorValue(apply_substitution(tensor.shape, mapping), origin=tensor.origin)
+
+
+def _dim_symbol_from_ast(node: ast.AST | None) -> int | str | None:
+    if node is None:
+        return None
+    val = int_from_ast(node)
+    if val is not None:
+        return val
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mult, ast.Add, ast.Sub)):
+        left = _dim_symbol_from_ast(node.left)
+        right = _dim_symbol_from_ast(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(left, int) and isinstance(right, int):
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Add):
+                return left + right
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            op_str = "*"
+        elif isinstance(node.op, ast.Add):
+            op_str = "+"
+        else:
+            op_str = "-"
+        return f"{left}{op_str}{right}"
+    return None
+
+
+def _collect_positive_scalar_params(init_func: ast.FunctionDef) -> set[str]:
+    positive: set[str] = set()
+    for statement in init_func.body:
+        if not isinstance(statement, ast.If):
+            continue
+        test = statement.test
+        if (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and len(test.comparators) == 1
+            and isinstance(test.left, ast.Name)
+            and isinstance(test.comparators[0], ast.Constant)
+            and isinstance(test.comparators[0].value, int)
+            and any(isinstance(item, ast.Raise) for item in statement.body)
+        ):
+            op = test.ops[0]
+            bound = test.comparators[0].value
+            if (isinstance(op, ast.LtE) and bound == 0) or (isinstance(op, ast.Lt) and bound == 1):
+                positive.add(test.left.id)
+    return positive
+
+
+def _loop_sequence_binding(
+    statement: ast.For,
+    sequence_specs: dict[str, SequentialSpec],
+    positive_params: set[str],
+    custom_module_templates: dict[str, CustomModuleTemplate],
+) -> tuple[str, SequentialSpec] | None:
+    if not isinstance(statement.target, ast.Name):
+        return None
+    if not (
+        isinstance(statement.iter, ast.Call)
+        and isinstance(statement.iter.func, ast.Name)
+        and statement.iter.func.id == "range"
+        and len(statement.iter.args) == 1
+    ):
+        return None
+    count_node = statement.iter.args[0]
+    count_literal = int_from_ast(count_node)
+    count_name = count_node.id if isinstance(count_node, ast.Name) else None
+    min_count = (
+        1
+        if (count_literal is not None and count_literal > 0) or count_name in positive_params
+        else 0
+    )
+
+    loop_var = statement.target.id
+    append_target: str | None = None
+    append_arg: ast.expr | None = None
+    local_bindings: dict[str, ast.expr] = {}
+    for body_stmt in statement.body:
+        if isinstance(body_stmt, ast.Assign) and len(body_stmt.targets) == 1:
+            target = body_stmt.targets[0]
+            if isinstance(target, ast.Name):
+                local_bindings[target.id] = body_stmt.value
+            continue
+        if (
+            isinstance(body_stmt, ast.Expr)
+            and isinstance(body_stmt.value, ast.Call)
+            and isinstance(body_stmt.value.func, ast.Attribute)
+            and isinstance(body_stmt.value.func.value, ast.Name)
+            and body_stmt.value.func.attr == "append"
+            and len(body_stmt.value.args) == 1
+        ):
+            append_target = body_stmt.value.func.value.id
+            append_arg = body_stmt.value.args[0]
+
+    if append_target is None or append_arg is None or append_target not in sequence_specs:
+        return None
+
+    first_node = _resolve_loop_expr(append_arg, local_bindings, loop_var, is_first=True)
+    rest_node = _resolve_loop_expr(append_arg, local_bindings, loop_var, is_first=False)
+    first_spec = _parse_module_spec(first_node, sequence_specs, custom_module_templates)
+    rest_spec = _parse_module_spec(rest_node, sequence_specs, custom_module_templates)
+    if first_spec is None and rest_spec is None:
+        return None
+
+    # Exact literal trip count: emit a finite summary.
+    if count_literal is not None:
+        if count_literal <= 0:
+            return append_target, SequentialSpec(specs=())
+        if first_spec is None:
+            return None
+        if count_literal == 1:
+            return append_target, SequentialSpec(specs=(first_spec,))
+        if rest_spec is None:
+            return None
+        if first_spec == rest_spec:
+            return append_target, SequentialSpec(
+                specs=(RepeatSpec(first_spec, count_literal, min_count=count_literal),)
+            )
+        return append_target, SequentialSpec(
+            specs=(
+                first_spec,
+                RepeatSpec(rest_spec, count_literal - 1, min_count=count_literal - 1),
+            )
+        )
+
+    # Unknown count with no positivity guarantee: only safe when every iteration has the same spec.
+    if first_spec is not None and rest_spec is not None and first_spec == rest_spec:
+        return append_target, SequentialSpec(
+            specs=(RepeatSpec(first_spec, count_name, min_count=min_count),)
+        )
+
+    # Unknown positive count: emit one required first stage plus an unknown optional stable suffix.
+    if min_count >= 1 and first_spec is not None and rest_spec is not None:
+        return append_target, SequentialSpec(
+            specs=(first_spec, RepeatSpec(rest_spec, None, min_count=0))
+        )
+
+    return None
+
+
+def _resolve_loop_expr(
+    node: ast.expr,
+    bindings: dict[str, ast.expr],
+    loop_var: str,
+    *,
+    is_first: bool,
+) -> ast.expr:
+    if isinstance(node, ast.Name) and node.id in bindings:
+        return _resolve_loop_expr(bindings[node.id], bindings, loop_var, is_first=is_first)
+    if isinstance(node, ast.IfExp) and _is_first_iteration_test(node.test, loop_var):
+        branch = node.body if is_first else node.orelse
+        return _resolve_loop_expr(branch, bindings, loop_var, is_first=is_first)
+    if isinstance(node, ast.Call):
+        return ast.Call(
+            func=_resolve_loop_expr(node.func, bindings, loop_var, is_first=is_first),
+            args=[
+                _resolve_loop_expr(arg, bindings, loop_var, is_first=is_first) for arg in node.args
+            ],
+            keywords=[
+                ast.keyword(
+                    arg=kw.arg,
+                    value=_resolve_loop_expr(kw.value, bindings, loop_var, is_first=is_first),
+                )
+                for kw in node.keywords
+            ],
+        )
+    if isinstance(node, ast.BinOp):
+        return ast.BinOp(
+            left=_resolve_loop_expr(node.left, bindings, loop_var, is_first=is_first),
+            op=node.op,
+            right=_resolve_loop_expr(node.right, bindings, loop_var, is_first=is_first),
+        )
+    if isinstance(node, ast.Attribute):
+        return ast.Attribute(
+            value=_resolve_loop_expr(node.value, bindings, loop_var, is_first=is_first),
+            attr=node.attr,
+            ctx=node.ctx,
+        )
+    return node
+
+
+def _is_first_iteration_test(test: ast.AST, loop_var: str) -> bool:
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
+        return False
+    left = test.left
+    right = test.comparators[0]
+    return isinstance(test.ops[0], ast.Eq) and (
+        (
+            isinstance(left, ast.Name)
+            and left.id == loop_var
+            and isinstance(right, ast.Constant)
+            and right.value == 0
+        )
+        or (
+            isinstance(right, ast.Name)
+            and right.id == loop_var
+            and isinstance(left, ast.Constant)
+            and left.value == 0
+        )
+    )
 
 
 def _keyword_or_default(call: ast.Call, name: str) -> ast.AST | None:
@@ -541,6 +913,43 @@ def _analyze_function(
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
 ) -> None:
+    env, local_aliases, tensor_params, return_shape = _collect_function_annotations(
+        function, context
+    )
+    # Track whether this function has tensor-annotated parameters (for TSF2xxx warnings).
+    old_in_annotated = context.in_annotated_function
+    context.in_annotated_function = len(tensor_params) > 0
+    # Parse return annotation; set on context so _analyze_statement can validate.
+    old_return_shape = context.return_shape
+    old_collected_returns = context.collected_returns
+    context.collected_returns = []
+    context.return_shape = return_shape
+    for statement in function.body:
+        _analyze_statement(statement, env, context, module_specs, local_aliases)
+    # Emit a signature hover on the function name if any tensor params are present.
+    if tensor_params:
+        _emit_signature_hover(
+            function, tensor_params, context.return_shape, context.collected_returns, context
+        )
+    context.collected_returns = old_collected_returns
+    context.return_shape = old_return_shape
+    context.in_annotated_function = old_in_annotated
+
+
+def _emit_function_annotation_hovers(function: ast.FunctionDef, context: ModuleContext) -> None:
+    _, _, tensor_params, return_shape = _collect_function_annotations(function, context)
+    if tensor_params:
+        _emit_signature_hover(function, tensor_params, return_shape, [], context)
+
+
+def _collect_function_annotations(
+    function: ast.FunctionDef,
+    context: ModuleContext,
+    *,
+    emit_hovers: bool = True,
+) -> tuple[
+    dict[str, Value], dict[str, TensorValue], list[tuple[str, TensorValue]], TensorValue | None
+]:
     env: dict[str, Value] = {}
     local_aliases: dict[str, TensorValue] = dict(context.aliases)
     tensor_params: list[tuple[str, TensorValue]] = []
@@ -554,36 +963,67 @@ def _analyze_function(
         except AnnotationParseError as error:
             context.error(argument, "TSF1001", error.message)
             continue
-        _maybe_hover_alias_reference(argument.annotation, local_aliases, context)
+        if emit_hovers:
+            _maybe_hover_alias_reference(argument.annotation, local_aliases, context)
         if tensor is not None:
             env[argument.arg] = tensor
-            context.hover(argument.arg, argument, tensor)
+            if emit_hovers:
+                context.hover(argument.arg, argument, tensor)
             tensor_params.append((argument.arg, tensor))
-    # Track whether this function has tensor-annotated parameters (for TSF2xxx warnings).
-    old_in_annotated = context.in_annotated_function
-    context.in_annotated_function = len(tensor_params) > 0
-    # Parse return annotation; set on context so _analyze_statement can validate.
-    old_return_shape = context.return_shape
-    old_collected_returns = context.collected_returns
-    context.collected_returns = []
+
+    return_shape: TensorValue | None = None
     if function.returns is not None:
         try:
-            context.return_shape = parse_tensor_annotation(function.returns, local_aliases)
+            return_shape = parse_tensor_annotation(function.returns, local_aliases)
         except AnnotationParseError:
-            context.return_shape = None
-        _maybe_hover_alias_reference(function.returns, local_aliases, context)
-    else:
-        context.return_shape = None
-    for statement in function.body:
-        _analyze_statement(statement, env, context, module_specs, local_aliases)
-    # Emit a signature hover on the function name if any tensor params are present.
-    if tensor_params:
-        _emit_signature_hover(
-            function, tensor_params, context.return_shape, context.collected_returns, context
-        )
-    context.collected_returns = old_collected_returns
-    context.return_shape = old_return_shape
-    context.in_annotated_function = old_in_annotated
+            return_shape = None
+        if emit_hovers:
+            _maybe_hover_alias_reference(function.returns, local_aliases, context)
+
+    return env, local_aliases, tensor_params, return_shape
+
+
+def _init_tensor_from_expr(node: ast.AST, env: dict[str, Value]) -> TensorValue | None:
+    value = env.get(node.id) if isinstance(node, ast.Name) else None
+    if isinstance(value, TensorValue):
+        return value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        base = _init_tensor_from_expr(node.func.value, env)
+        if base is not None and node.func.attr in _PASSTHROUGH_METHODS:
+            return base
+    return None
+
+
+def _is_register_buffer_call(statement: ast.stmt) -> bool:
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return False
+    call = statement.value
+    return (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "self"
+        and call.func.attr == "register_buffer"
+    )
+
+
+def _register_buffer_binding(
+    statement: ast.stmt,
+    env: dict[str, Value],
+) -> tuple[str, TensorValue] | None:
+    if not _is_register_buffer_call(statement):
+        return None
+    assert isinstance(statement, ast.Expr)
+    call = statement.value
+    assert isinstance(call, ast.Call)
+    if len(call.args) < 2:
+        return None
+    name_node = call.args[0]
+    if not isinstance(name_node, ast.Constant) or not isinstance(name_node.value, str):
+        return None
+    tensor_value = _init_tensor_from_expr(call.args[1], env)
+    if tensor_value is None:
+        return None
+    return name_node.value, tensor_value
 
 
 def _emit_signature_hover(
@@ -638,6 +1078,36 @@ def _emit_signature_hover(
     )
 
 
+def _unpack_tensor_tuple(
+    elts: list[ast.expr],
+    values: tuple[Value, ...],
+    env: dict[str, Value],
+    context: ModuleContext,
+) -> None:
+    """Bind names from a tuple unpack against a statically-known tuple value.
+
+    Handles both flat and nested patterns, e.g.:
+      ``a, b, c = chunk_result``          — flat
+      ``out, (h, c) = lstm(x)``           — nested tuple structure
+      ``_, (hidden, _) = lstm(x)``        — nested with wildcards
+    """
+    value_idx = 0
+    for elt in elts:
+        if value_idx >= len(values):
+            break
+        current = values[value_idx]
+        if isinstance(elt, ast.Tuple):
+            if isinstance(current, TensorTupleValue):
+                _unpack_tensor_tuple(list(elt.elts), current.tensors, env, context)
+            elif isinstance(current, TupleValue):
+                _unpack_tensor_tuple(list(elt.elts), current.items, env, context)
+            else:
+                _bind_target(elt, current, env, context)
+        else:
+            _bind_target(elt, current, env, context)
+        value_idx += 1
+
+
 def _analyze_statement(
     statement: ast.stmt,
     env: dict[str, Value],
@@ -672,8 +1142,13 @@ def _analyze_statement(
         value = _eval_expr(statement.value, env, context, module_specs)
         for assign_target in statement.targets:
             if isinstance(assign_target, ast.Tuple) and isinstance(value, TensorTupleValue):
-                for t_elt, tv in zip(assign_target.elts, value.tensors, strict=False):
-                    _bind_target(t_elt, tv, env, context)
+                _unpack_tensor_tuple(list(assign_target.elts), value.tensors, env, context)
+            elif isinstance(assign_target, ast.Tuple) and isinstance(value, TupleValue):
+                _unpack_tensor_tuple(list(assign_target.elts), value.items, env, context)
+            elif isinstance(assign_target, ast.Tuple) and isinstance(value, ShapeTupleValue):
+                for t_elt, dim in zip(assign_target.elts, value.dims, strict=False):
+                    if isinstance(t_elt, ast.Name):
+                        env[t_elt.id] = dim
             else:
                 _bind_target(assign_target, value, env, context)
         return
@@ -808,10 +1283,18 @@ def _alias_target_node(statement: ast.stmt) -> ast.Name | None:
         return None
     if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
         return statement.target
-    if hasattr(ast, "TypeAlias") and isinstance(statement, ast.TypeAlias):
-        if isinstance(statement.name, ast.Name):
-            return statement.name
+    alias_name = _type_alias_name_node(statement)
+    if alias_name is not None:
+        return alias_name
     return None
+
+
+def _type_alias_name_node(statement: ast.stmt) -> ast.Name | None:
+    type_alias_cls = getattr(ast, "TypeAlias", None)
+    if type_alias_cls is None or not isinstance(statement, type_alias_cls):
+        return None
+    name = getattr(statement, "name", None)
+    return name if isinstance(name, ast.Name) else None
 
 
 def _maybe_hover_alias_reference(
@@ -889,8 +1372,12 @@ def _bind_target(
             EmbeddingSpec,
             Pool2dSpec,
             MultiheadAttentionSpec,
+            LSTMSpec,
+            CustomModuleSpec,
+            RepeatSpec,
             SequentialSpec,
             TensorTupleValue,
+            TupleValue,
         ),
     ):
         env[target.id] = value
@@ -920,6 +1407,10 @@ def _eval_expr(
         if isinstance(base, TensorValue) and node.attr in {"values", "indices"}:
             return base
         if isinstance(node.value, ast.Name) and node.value.id == "self":
+            tensor = context.self_tensors.get(node.attr)
+            if tensor is not None:
+                context.hover(node.attr, node, tensor)
+                return tensor
             return module_specs.get(node.attr)
         return None
     if isinstance(node, ast.Subscript):
@@ -932,6 +1423,12 @@ def _eval_expr(
                 norm = normalize_index(idx, len(base.tensors))
                 if norm is not None:
                     return base.tensors[norm]
+        if isinstance(base, TupleValue):
+            idx = int_from_ast(node.slice)
+            if idx is not None:
+                norm = normalize_index(idx, len(base.items))
+                if norm is not None:
+                    return base.items[norm]
         return None
     _element_wise_ops = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)
     if isinstance(node, ast.BinOp) and isinstance(node.op, _element_wise_ops):
@@ -973,14 +1470,36 @@ def _apply_module_spec(
     node: ast.AST,
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
-) -> TensorValue | TensorTupleValue | None:
+) -> TensorValue | TensorTupleValue | TupleValue | None:
     """Apply a single module spec to an input tensor and return the output."""
     if isinstance(spec, LinearSpec):
+        if spec.in_features is not None and tensor.rank > 0:
+            last = tensor.shape.dims[-1]
+            if isinstance(last, (SymbolicDim, ExpressionDim)):
+                context.error(
+                    node,
+                    "TSF1012",
+                    f"Symbolic dim '{render_dim(last)}' used where nn.Linear expects"
+                    f" in_features={spec.in_features} — consider replacing with"
+                    f" {spec.in_features} in your Shape annotation.",
+                    severity="warning",
+                )
         result = infer_linear(spec, tensor)
         if result is None:
             context.error(node, "TSF1007", "nn.Linear input shape mismatch.")
         return result
     if isinstance(spec, Conv2dSpec):
+        if spec.in_channels is not None and tensor.rank == 4:
+            ch = tensor.shape.dims[1]
+            if isinstance(ch, (SymbolicDim, ExpressionDim)):
+                context.error(
+                    node,
+                    "TSF1012",
+                    f"Symbolic dim '{render_dim(ch)}' used where nn.Conv2d expects"
+                    f" in_channels={spec.in_channels} — consider replacing with"
+                    f" {spec.in_channels} in your Shape annotation.",
+                    severity="warning",
+                )
         result = infer_conv2d(spec, tensor)
         if result is None:
             context.error(node, "TSF1007", "nn.Conv2d input shape mismatch.")
@@ -994,6 +1513,43 @@ def _apply_module_spec(
         if result is None:
             context.error(node, "TSF1007", "nn.MaxPool2d/AvgPool2d requires rank-4 input.")
         return result
+    if isinstance(spec, CustomModuleSpec):
+        if spec.input_shape is None or spec.return_shape is None:
+            return None
+        if spec.input_shape.rank != tensor.rank:
+            return None
+        for declared_dim, actual_dim in zip(
+            spec.input_shape.shape.dims, tensor.shape.dims, strict=True
+        ):
+            if (
+                isinstance(declared_dim, ConstantDim)
+                and isinstance(actual_dim, ConstantDim)
+                and declared_dim.value != actual_dim.value
+            ):
+                return None
+        mapping = unify_dims(spec.input_shape.shape.dims, tensor.shape.dims)
+        return TensorValue(apply_substitution(spec.return_shape.shape, mapping))
+    if isinstance(spec, RepeatSpec):
+        current = tensor
+        if isinstance(spec.count, int):
+            total = max(spec.count, spec.min_count)
+            for _ in range(total):
+                out = _apply_module_spec(spec.spec, current, node, context, module_specs)
+                if not isinstance(out, TensorValue):
+                    return None
+                current = out
+            return current
+
+        for _ in range(spec.min_count):
+            out = _apply_module_spec(spec.spec, current, node, context, module_specs)
+            if not isinstance(out, TensorValue):
+                return None
+            current = out
+
+        probe = _apply_module_spec(spec.spec, current, node, context, module_specs)
+        if isinstance(probe, TensorValue) and str(probe.shape) == str(current.shape):
+            return current
+        return None
     if isinstance(spec, SequentialSpec):
         current = tensor
         for sub in spec.specs:
@@ -1007,6 +1563,22 @@ def _apply_module_spec(
         output = TensorValue(tensor.shape)
         weights = TensorValue(TensorShape((UnknownDim("?"), UnknownDim("?"), UnknownDim("?"))))
         return TensorTupleValue((output, weights))
+    if isinstance(spec, LSTMSpec):
+        if spec.input_size is not None and tensor.rank == 3:
+            last = tensor.shape.dims[-1]
+            if isinstance(last, (SymbolicDim, ExpressionDim)):
+                context.error(
+                    node,
+                    "TSF1012",
+                    f"Symbolic dim '{render_dim(last)}' used where nn.LSTM expects"
+                    f" input_size={spec.input_size} — consider replacing with"
+                    f" {spec.input_size} in your Shape annotation.",
+                    severity="warning",
+                )
+        lstm_out = infer_lstm(spec, tensor)
+        if lstm_out is None:
+            context.error(node, "TSF1007", "nn.LSTM input shape mismatch.")
+        return lstm_out
     return None
 
 
@@ -1046,16 +1618,14 @@ def _eval_named_module_alias_call(
     return None
 
 
-def _eval_signature_call(
+def _eval_signature_match(
     node: ast.Call,
+    sig: FuncSig,
     env: dict[str, Value],
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
 ) -> TensorValue | None:
-    if not isinstance(node.func, ast.Name):
-        return None
-    sig = context.func_sigs.get(node.func.id)
-    if sig is None or sig.return_shape is None:
+    if sig.return_shape is None:
         return None
     mapping: dict[str, Dim] = {}
     for param_tv, arg_node in zip(sig.param_shapes, node.args, strict=False):
@@ -1076,6 +1646,20 @@ def _eval_signature_call(
                 else:
                     mapping[sym_name] = bound_dim
     return TensorValue(apply_substitution(sig.return_shape.shape, mapping))
+
+
+def _eval_signature_call(
+    node: ast.Call,
+    env: dict[str, Value],
+    context: ModuleContext,
+    module_specs: dict[str, ModuleSpec],
+) -> TensorValue | None:
+    if not isinstance(node.func, ast.Name):
+        return None
+    sig = context.func_sigs.get(node.func.id)
+    if sig is None:
+        return None
+    return _eval_signature_match(node, sig, env, context, module_specs)
 
 
 def _maybe_warn_unannotated_function_call(
@@ -1114,7 +1698,15 @@ def _eval_call(
         owner: Value | Dim | None
         is_self_call = isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
         if is_self_call:
+            # Check for a submodule spec (nn.Linear, etc.)
             owner = module_specs.get(node.func.attr)
+            # Check for a method signature (self.helper_method())
+            method_sig = context.method_sigs.get(node.func.attr)
+            if method_sig is not None:
+                result = _eval_signature_match(node, method_sig, env, context, module_specs)
+                if isinstance(result, TensorValue):
+                    context.hover(node.func.attr, node, result)
+                return result
         else:
             owner = _eval_expr(node.func.value, env, context, module_specs)
         if isinstance(owner, TensorValue):
@@ -1128,12 +1720,13 @@ def _eval_call(
         if is_self_call and owner is None and context.in_annotated_function:
             if _call_has_tensor_arg(node.args, env, context, module_specs):
                 attr = node.func.attr
-                context.error(
-                    node,
-                    "TSF2003",
-                    f"No shape spec for 'self.{attr}' — shape not tracked.",
-                    severity="warning",
-                )
+                if attr not in context.method_sigs:
+                    context.error(
+                        node,
+                        "TSF2003",
+                        f"No shape spec for 'self.{attr}' — shape not tracked.",
+                        severity="warning",
+                    )
     if callee_name.endswith("reshape") and len(node.args) >= 2:
         tensor = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(tensor, TensorValue):
@@ -1557,6 +2150,23 @@ def _reshape_from_args(
     return infer_reshape(tensor, tuple(requested))
 
 
+def _dim_binop(op: ast.operator, left: Dim | int, right: Dim | int) -> Dim | None:
+    """Apply an arithmetic operator to two dims, returning a combined Dim."""
+    ld = ConstantDim(left) if isinstance(left, int) else left
+    rd = ConstantDim(right) if isinstance(right, int) else right
+    if isinstance(op, ast.Mult):
+        return product_dim((ld, rd))
+    if isinstance(op, ast.Add):
+        return sum_dim((ld, rd))
+    if isinstance(op, ast.Sub):
+        if isinstance(ld, ConstantDim) and isinstance(rd, ConstantDim):
+            return ConstantDim(ld.value - rd.value)
+        return ExpressionDim(f"({render_dim(ld)} - {render_dim(rd)})")
+    if isinstance(op, ast.FloorDiv):
+        return quotient_dim((ld,), (rd,))
+    return None
+
+
 def _dim_from_expr(
     node: ast.AST,
     env: dict[str, Value],
@@ -1568,6 +2178,21 @@ def _dim_from_expr(
         return integer
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return make_dim(node.value)
+    # self.attr — look up scalar attributes stored from __init__ assignments.
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+        and node.attr in context.self_scalars
+    ):
+        return context.self_scalars[node.attr]
+    if isinstance(node, ast.BinOp) and isinstance(
+        node.op, (ast.Mult, ast.Add, ast.Sub, ast.FloorDiv)
+    ):
+        left = _dim_from_expr(node.left, env, context, module_specs)
+        right = _dim_from_expr(node.right, env, context, module_specs)
+        if left is not None and right is not None:
+            return _dim_binop(node.op, left, right)
     value = _eval_expr(node, env, context, module_specs)
     if isinstance(value, IntegerValue):
         if value.value is not None:
