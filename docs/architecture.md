@@ -90,6 +90,8 @@ handled the same way when they can be resolved through `ProjectIndex`.
 | `TSF1008` | error | Invalid `permute`, `transpose`, `squeeze`, `unsqueeze`, `chunk`, or `movedim` dimensions |
 | `TSF1009` | error | Return shape does not match the declared return type annotation |
 | `TSF1010` | error | Symbolic dim bound to conflicting values across call-site arguments |
+| `TSF1011` | error | Local annotated variable shape does not match the inferred shape |
+| `TSF1012` | warning | Symbolic dim used where a specific constant is required (e.g. `nn.Linear.in_features`, `nn.Conv2d.in_channels`) — suggests replacing with the literal constant in the `Shape` annotation |
 | `TSF2001` | warning | Unsupported tensor method or unresolvable method arguments — shape inference lost |
 | `TSF2002` | warning | Call to unannotated function with tensor arg — shape inference lost |
 | `TSF2003` | warning | Unresolvable module `self.xxx` — no spec inferred |

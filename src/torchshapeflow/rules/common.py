@@ -8,6 +8,7 @@ from torchshapeflow.model import (
     ExpressionDim,
     IntegerValue,
     ShapeTupleValue,
+    SymbolicDim,
     render_dim,
 )
 
@@ -74,6 +75,43 @@ def tuple_index(value: ShapeTupleValue, index: int) -> Dim | None:
 
 def render_dims(dims: tuple[Dim, ...]) -> str:
     return "[" + ", ".join(render_dim(dim) for dim in dims) + "]"
+
+
+def to_dim(val: int | str) -> Dim:
+    """Convert a spec output dimension to a Dim.
+
+    Args:
+        val: Literal integer, simple variable name, or compound expression string.
+
+    Returns:
+        ConstantDim for int values, SymbolicDim for simple identifiers,
+        ExpressionDim for compound expressions (e.g. "horizon_hours*num_counties").
+    """
+    if isinstance(val, int):
+        return ConstantDim(val)
+    if val.isidentifier():
+        return SymbolicDim(val)
+    return ExpressionDim(val)
+
+
+def scale_dim(d: int, val: int | str) -> Dim:
+    """Multiply a spec dimension by a scalar factor d.
+
+    Used for LSTM bidirectional (d=2) scaling of hidden_size and num_layers.
+
+    Args:
+        d: Scale factor (typically 1 or 2).
+        val: Literal integer or variable name string.
+
+    Returns:
+        ConstantDim(d*val) for int, ExpressionDim("d*val") for string when d > 1,
+        or to_dim(val) when d == 1.
+    """
+    if d == 1:
+        return to_dim(val)
+    if isinstance(val, int):
+        return ConstantDim(d * val)
+    return ExpressionDim(f"{d}*{val}")
 
 
 def spatial_output_dim(dim: Dim, kernel: int, stride: int, padding: int, dilation: int) -> Dim:

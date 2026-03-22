@@ -3,6 +3,7 @@ from torchshapeflow.rules.conv2d import infer_conv2d
 from torchshapeflow.rules.embedding import infer_embedding
 from torchshapeflow.rules.indexing import infer_subscript
 from torchshapeflow.rules.linear import infer_linear
+from torchshapeflow.rules.lstm import infer_lstm
 from torchshapeflow.rules.pool2d import infer_pool2d
 from torchshapeflow.rules.shape_ops import (
     infer_cat,
@@ -40,6 +41,7 @@ __all__ = [
     "infer_index_select",
     "infer_interpolate",
     "infer_linear",
+    "infer_lstm",
     "infer_matmul",
     "infer_mm",
     "infer_movedim",

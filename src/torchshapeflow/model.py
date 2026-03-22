@@ -81,14 +81,16 @@ class IntegerValue:
 class LinearSpec:
     # in_features is None when the constructor arg was non-literal (e.g. from a variable).
     in_features: int | None
-    out_features: int
+    # out_features is str (symbolic label) when the constructor arg was a variable name.
+    out_features: int | str
 
 
 @dataclass(frozen=True)
 class Conv2dSpec:
     # in_channels is None when the constructor arg was non-literal (e.g. from a config).
     in_channels: int | None
-    out_channels: int
+    # out_channels is str (symbolic label) when the constructor arg was a variable name.
+    out_channels: int | str
     kernel_size: tuple[int, int]
     stride: tuple[int, int]
     padding: tuple[int, int]
@@ -107,7 +109,8 @@ class PassthroughSpec:
 class EmbeddingSpec:
     """Spec for nn.Embedding — appends embedding_dim to the index tensor shape."""
 
-    embedding_dim: int
+    # embedding_dim is str (symbolic label) when the constructor arg was a variable name.
+    embedding_dim: int | str
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,52 @@ class MultiheadAttentionSpec:
 
 
 @dataclass(frozen=True)
+class LSTMSpec:
+    """Spec for nn.LSTM.
+
+    input_size is None when the constructor arg was non-literal.
+    D = 2 if bidirectional else 1.
+    H_out = proj_size when proj_size > 0, else hidden_size.
+    Returns a nested TupleValue matching PyTorch:
+      [0] output:     (N, L, D*H_out) if batch_first else (L, N, D*H_out)
+      [1][0] h_n:     (D*num_layers, N, H_out)
+      [1][1] c_n:     (D*num_layers, N, hidden_size)
+    """
+
+    input_size: int | None
+    # hidden_size / proj_size / num_layers are str (symbolic labels) when the constructor arg
+    # was a variable name.
+    hidden_size: int | str
+    proj_size: int | str | None
+    num_layers: int | str
+    batch_first: bool
+    bidirectional: bool
+
+
+@dataclass(frozen=True)
+class CustomModuleSpec:
+    """Spec derived from an annotated custom nn.Module.forward contract."""
+
+    input_shape: TensorValue | None
+    return_shape: TensorValue | None
+
+
+@dataclass(frozen=True)
+class RepeatSpec:
+    """Spec for a module repeated a known or unknown number of times.
+
+    When ``count`` is ``None`` or symbolic, inference may still succeed if applying
+    ``spec`` once leaves the output shape unchanged thereafter (a shape fixed point).
+    ``min_count`` captures lower bounds known statically, e.g. from ``if depth <= 0:
+    raise`` before ``range(depth)``.
+    """
+
+    spec: ModuleSpec
+    count: int | str | None
+    min_count: int = 0
+
+
+@dataclass(frozen=True)
 class SequentialSpec:
     """Spec for nn.Sequential — applies a chain of sub-module specs in order."""
 
@@ -149,6 +198,9 @@ class SequentialSpec:
         | EmbeddingSpec
         | Pool2dSpec
         | MultiheadAttentionSpec
+        | LSTMSpec
+        | CustomModuleSpec
+        | RepeatSpec
         | SequentialSpec,
         ...,
     ]
@@ -162,6 +214,9 @@ ModuleSpec: TypeAlias = (
     | EmbeddingSpec
     | Pool2dSpec
     | MultiheadAttentionSpec
+    | LSTMSpec
+    | CustomModuleSpec
+    | RepeatSpec
     | SequentialSpec
 )
 
@@ -171,6 +226,13 @@ class TensorTupleValue:
     """A statically-known fixed-length tuple of tensors, e.g. from x.chunk() or x.split()."""
 
     tensors: tuple[TensorValue, ...]
+
+
+@dataclass(frozen=True)
+class TupleValue:
+    """A statically-known fixed-length tuple of values, potentially nested."""
+
+    items: tuple[Value, ...]
 
 
 Value: TypeAlias = (
@@ -183,8 +245,13 @@ Value: TypeAlias = (
     | EmbeddingSpec
     | Pool2dSpec
     | MultiheadAttentionSpec
+    | LSTMSpec
+    | CustomModuleSpec
+    | RepeatSpec
     | SequentialSpec
     | TensorTupleValue
+    | TupleValue
+    | Dim
 )
 
 

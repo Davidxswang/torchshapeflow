@@ -8,16 +8,19 @@ from torchshapeflow.model import (
     EmbeddingSpec,
     ExpressionDim,
     LinearSpec,
+    LSTMSpec,
     Pool2dSpec,
     ShapeTupleValue,
     SymbolicDim,
     TensorShape,
     TensorValue,
+    TupleValue,
 )
 from torchshapeflow.rules.conv2d import infer_conv2d
 from torchshapeflow.rules.embedding import infer_embedding
 from torchshapeflow.rules.indexing import infer_subscript
 from torchshapeflow.rules.linear import infer_linear
+from torchshapeflow.rules.lstm import infer_lstm
 from torchshapeflow.rules.pool2d import infer_pool2d
 from torchshapeflow.rules.shape_ops import infer_chunk, infer_reduction, infer_split
 
@@ -424,3 +427,124 @@ def test_pool2d_preserves_batch_channels() -> None:
 def test_pool2d_rejects_non_4d() -> None:
     spec = Pool2dSpec(kernel_size=(2, 2), stride=(2, 2), padding=(0, 0), dilation=(1, 1))
     assert infer_pool2d(spec, _t("B", "C", 8)) is None
+
+
+# ---------------------------------------------------------------------------
+# infer_lstm
+# ---------------------------------------------------------------------------
+
+
+def _lstm(
+    hidden_size: int = 256,
+    num_layers: int = 1,
+    batch_first: bool = False,
+    bidirectional: bool = False,
+    input_size: int | None = 128,
+    proj_size: int | None = None,
+) -> LSTMSpec:
+    return LSTMSpec(
+        input_size=input_size,
+        hidden_size=hidden_size,
+        proj_size=proj_size,
+        num_layers=num_layers,
+        batch_first=batch_first,
+        bidirectional=bidirectional,
+    )
+
+
+def test_lstm_returns_three_tensors() -> None:
+    result = infer_lstm(_lstm(), _t("L", "N", 128))
+    assert isinstance(result, TupleValue)
+    assert len(result.items) == 2
+
+
+def test_lstm_seq_first_shapes() -> None:
+    result = infer_lstm(_lstm(hidden_size=256), _t("L", "N", 128))
+    assert result is not None
+    output = result.items[0]
+    state = result.items[1]
+    assert isinstance(output, TensorValue)
+    assert isinstance(state, TupleValue)
+    h_n, c_n = state.items
+    assert isinstance(h_n, TensorValue)
+    assert isinstance(c_n, TensorValue)
+    assert str(output.shape) == "[L, N, 256]"
+    assert str(h_n.shape) == "[1, N, 256]"
+    assert str(c_n.shape) == "[1, N, 256]"
+
+
+def test_lstm_batch_first_shapes() -> None:
+    result = infer_lstm(_lstm(hidden_size=256, batch_first=True), _t("N", "L", 128))
+    assert result is not None
+    output = result.items[0]
+    state = result.items[1]
+    assert isinstance(output, TensorValue)
+    assert isinstance(state, TupleValue)
+    h_n = state.items[0]
+    assert isinstance(h_n, TensorValue)
+    assert str(output.shape) == "[N, L, 256]"
+    assert str(h_n.shape) == "[1, N, 256]"
+
+
+def test_lstm_bidirectional_doubles_output_hidden() -> None:
+    result = infer_lstm(_lstm(hidden_size=256, bidirectional=True), _t("L", "N", 128))
+    assert result is not None
+    output = result.items[0]
+    state = result.items[1]
+    assert isinstance(output, TensorValue)
+    assert isinstance(state, TupleValue)
+    h_n = state.items[0]
+    assert isinstance(h_n, TensorValue)
+    assert output.shape.dims[-1] == ConstantDim(512)  # D*hidden = 2*256
+    assert h_n.shape.dims[0] == ConstantDim(2)  # D*num_layers = 2*1
+
+
+def test_lstm_num_layers_affects_h_n() -> None:
+    result = infer_lstm(_lstm(num_layers=3), _t("L", "N", 128))
+    assert result is not None
+    state = result.items[1]
+    assert isinstance(state, TupleValue)
+    h_n, c_n = state.items
+    assert isinstance(h_n, TensorValue)
+    assert isinstance(c_n, TensorValue)
+    assert h_n.shape.dims[0] == ConstantDim(3)
+    assert c_n.shape.dims[0] == ConstantDim(3)
+
+
+def test_lstm_bidirectional_multilayer() -> None:
+    result = infer_lstm(_lstm(hidden_size=128, num_layers=2, bidirectional=True), _t("L", "N", 128))
+    assert result is not None
+    state = result.items[1]
+    assert isinstance(state, TupleValue)
+    h_n = state.items[0]
+    assert isinstance(h_n, TensorValue)
+    assert h_n.shape.dims[0] == ConstantDim(4)  # D*num_layers = 2*2
+
+
+def test_lstm_rejects_non_rank3() -> None:
+    assert infer_lstm(_lstm(), _t("N", "L")) is None
+    assert infer_lstm(_lstm(), _t("N", "L", 128, 4)) is None
+
+
+def test_lstm_input_size_none_skips_check() -> None:
+    result = infer_lstm(_lstm(input_size=None), _t("L", "N", "D"))
+    assert result is not None
+
+
+def test_lstm_input_size_mismatch_rejects() -> None:
+    assert infer_lstm(_lstm(input_size=128), _t("L", "N", 64)) is None
+
+
+def test_lstm_proj_size_changes_output_and_hidden_but_not_cell() -> None:
+    result = infer_lstm(_lstm(hidden_size=256, proj_size=64), _t("L", "N", 128))
+    assert result is not None
+    output = result.items[0]
+    state = result.items[1]
+    assert isinstance(output, TensorValue)
+    assert isinstance(state, TupleValue)
+    h_n, c_n = state.items
+    assert isinstance(h_n, TensorValue)
+    assert isinstance(c_n, TensorValue)
+    assert str(output.shape) == "[L, N, 64]"
+    assert str(h_n.shape) == "[1, N, 64]"
+    assert str(c_n.shape) == "[1, N, 256]"

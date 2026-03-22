@@ -14,7 +14,7 @@ Requires Python ≥ 3.10 and [uv](https://docs.astral.sh/uv/). Node.js ≥ 24 is
 
 ```bash
 make check     # format + lint + typecheck + tests  ← run before every PR
-make test      # tests only: uv run pytest -q
+make test      # tests only: uv run pytest -q  (xdist parallel by default)
 make format    # ruff format .
 make lint      # ruff check . --fix
 make typecheck # mypy .
@@ -37,16 +37,15 @@ make typecheck # mypy .
 | `format` | `ruff format .` | Auto-format source |
 | `lint` | `ruff check . --fix` | Lint and auto-fix |
 | `typecheck` | `mypy .` | Type-check with strict mypy |
-| `test` | `uv run pytest -q` | Run test suite |
+| `test` | `uv run pytest -q` | Run test suite (pytest-xdist parallel by default) |
 | `check` | format + lint + typecheck + test | Full local CI pass |
 | `docs` | `mkdocs build` | Build documentation site into `site/` |
 | `docs-serve` | `mkdocs serve` | Serve docs locally at `localhost:8000` |
 | `python-dist` | `uv build` | Build wheel and sdist into `dist/` |
 | `bundle-cli` | `scripts/build_bundled_cli.py` | Build a bundled `tsf` executable for the current host into `extensions/vscode/bin/<target>/` |
 | `extension-build` | `npm run build` in `extensions/vscode` | Development build of the VS Code extension |
-| `extension-package` | `npm run package` in `extensions/vscode` | Package `.vsix` into `extensions/vscode/dist/` |
-| `extension-package-bundled` | `bundle-cli` + `extension-package` | Build the host bundled CLI and package the extension |
-| `build` | `python-dist` + `extension-package-bundled` | Build all release artifacts |
+| `extension-package` | `bundle-cli` + `npm run package` in `extensions/vscode` | Rebuild the host bundled CLI, then package `.vsix` into `extensions/vscode/dist/` |
+| `build` | `python-dist` + `extension-package` | Build all release artifacts |
 | `bump-patch` | `scripts/bump_version.py patch` + `uv lock` | Bump patch version across all version files and lock |
 | `bump-minor` | `scripts/bump_version.py minor` + `uv lock` | Bump minor version |
 | `bump-major` | `scripts/bump_version.py major` + `uv lock` | Bump major version |
@@ -63,7 +62,7 @@ Four job groups run in parallel:
 - **`check`** (runs once on Python 3.12): format check, lint, type-check, docs build, bundled CLI build for the host runner, and VS Code extension packaging.
 - **`bundled-cli-linux`** (manylinux2014 x86_64): builds the Linux x64 bundled CLI in an older glibc environment and smoke-tests the binary.
 - **`bundled-cli`** (matrix: macOS arm64, Windows x64): builds and smoke-tests the non-Linux bundled CLI targets.
-- **`test`** (matrix: Python 3.10–3.14 × Ubuntu, macOS, Windows): `pytest -q`.
+- **`test`** (matrix: Python 3.10–3.14 × Ubuntu, macOS, Windows): `pytest -q` with xdist parallelism enabled by the repo pytest config.
 
 ### `docs.yml` — push to `main` and manual trigger
 
