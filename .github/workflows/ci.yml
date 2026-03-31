@@ -21,7 +21,7 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run ruff format . --check
       - run: uv run ruff check .
-      - run: uv run mypy .
+      - run: uv run ty check
       - run: uv run mkdocs build
       - run: uv run python scripts/build_bundled_cli.py --output-root extensions/vscode/bin --clean --smoke-test
       - working-directory: extensions/vscode

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "torchshapeflow"
-version = "0.5.0"
+version = "0.6.0"
 description = "Static AST-based PyTorch tensor shape analysis."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,9 +20,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-dependencies = [
-  "typer>=0.16.0",
-]
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/Davidxswang/torchshapeflow"
@@ -34,18 +32,18 @@ Documentation = "https://davidxswang.github.io/torchshapeflow/"
 dev = [
   "mkdocs>=1.6.1",
   "mkdocs-material>=9.7.5",
-  "mypy>=1.19.1",
   "pyinstaller>=6.16.0",
   "pytest>=9.0.2",
   "pytest-xdist>=3.8.0",
   "ruff>=0.15.6",
+  "ty>=0.0.1a19",
 ]
 examples = [
   "torch>=2.10.0",
 ]
 
 [project.scripts]
-tsf = "torchshapeflow.cli:app"
+tsf = "torchshapeflow.cli:entrypoint"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/torchshapeflow"]
@@ -77,14 +75,10 @@ select = [
   "B",
 ]
 
-[tool.mypy]
-python_version = "3.10"
-mypy_path = "src"
-strict = true
-packages = ["torchshapeflow"]
+[tool.ty.src]
 exclude = [
-  "^examples/",
-  "^tests/fixtures/",
+  "examples",
+  "tests/fixtures",
 ]
 
 [tool.pytest.ini_options]

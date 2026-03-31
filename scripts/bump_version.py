@@ -4,6 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import cast
 
 PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path("src/torchshapeflow/_version.py")
@@ -71,9 +72,11 @@ def _set_version_fields(payload: dict[str, object], version_text: str) -> None:
     payload["version"] = version_text
     packages = payload.get("packages")
     if isinstance(packages, dict):
-        root = packages.get("")
+        package_map = cast(dict[str, object], packages)
+        root = package_map.get("")
         if isinstance(root, dict):
-            root["version"] = version_text
+            root_payload = cast(dict[str, object], root)
+            root_payload["version"] = version_text
 
 
 if __name__ == "__main__":

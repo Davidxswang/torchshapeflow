@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
-
-import typer
 
 from torchshapeflow._version import __version__
 from torchshapeflow.analyzer import analyze_path
@@ -12,23 +12,77 @@ from torchshapeflow.index import ProjectIndex
 from torchshapeflow.report import FileReport
 from torchshapeflow.utils.paths import collect_python_files
 
-app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False, no_args_is_help=True)
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tsf",
+        description="Static AST-based PyTorch tensor shape analysis.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    check_parser = subparsers.add_parser(
+        "check",
+        help="Run shape analysis on a file or directory.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    check_parser.add_argument("path", type=Path, help="File or directory to analyze.")
+    check_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit JSON output.",
+    )
+    check_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Show per-file status for clean files.",
+    )
+
+    subparsers.add_parser(
+        "version",
+        help="Print the installed TorchShapeFlow version.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    return parser
 
 
-@app.command("check")
-def check(
-    path: Path,
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON output."),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Show per-file status for clean files."
-    ),
-) -> None:
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = list(argv) if argv is not None else sys.argv[1:]
+    if not args:
+        parser.print_help()
+        return 0
+
+    namespace = parser.parse_args(args)
+    command = namespace.command
+    if command == "check":
+        return _run_check(
+            path=namespace.path,
+            json_output=namespace.json_output,
+            verbose=namespace.verbose,
+        )
+    if command == "version":
+        print(__version__)
+        return 0
+
+    parser.print_help()
+    return 0
+
+
+def entrypoint() -> None:
+    raise SystemExit(main())
+
+
+def _run_check(path: Path, json_output: bool, verbose: bool) -> int:
     project_index = ProjectIndex()
     reports = [analyze_path(file_path, project_index) for file_path in collect_python_files(path)]
     payload = {"files": [report.to_dict() for report in reports]}
     if json_output:
-        typer.echo(json.dumps(payload, indent=2))
-        raise typer.Exit(code=_exit_code(reports))
+        print(json.dumps(payload, indent=2))
+        return _exit_code(reports)
+
     lines: list[str] = []
     for report in reports:
         if not report.diagnostics:
@@ -41,13 +95,8 @@ def check(
                 f"{diagnostic.severity} {diagnostic.code} {diagnostic.message}"
             )
     lines.append(_summary(reports))
-    typer.echo("\n".join(lines))
-    raise typer.Exit(code=_exit_code(reports))
-
-
-@app.command("version")
-def version() -> None:
-    typer.echo(__version__)
+    print("\n".join(lines))
+    return _exit_code(reports)
 
 
 def _exit_code(reports: Sequence[FileReport]) -> int:

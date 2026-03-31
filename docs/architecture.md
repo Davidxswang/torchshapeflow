@@ -24,7 +24,7 @@ signatures:
 | `index.py` | Project-local alias and annotated-function indexing (`ProjectIndex`, `FuncSig`, symbolic substitution for cross-file calls). |
 | `diagnostics.py` | `Diagnostic` dataclass and `Severity` type alias (`"error" \| "warning"`). |
 | `report.py` | `FileReport` (list of diagnostics + hover facts per file) and `HoverFact` (inferred shape at a source location). |
-| `cli.py` | Typer CLI. `tsf check` runs the analyzer and formats output. `tsf version` prints the package version. |
+| `cli.py` | `argparse` CLI. `tsf check` runs the analyzer and formats output. `tsf version` prints the package version. |
 | `rules/__init__.py` | Re-exports all public inference functions. |
 | `rules/shape_ops.py` | Tensor/functional shape-operator inference. See [Supported Operators](operators.md) for the canonical user-facing inventory. |
 | `rules/broadcasting.py` | `infer_binary_broadcast` — wraps `broadcast_shapes` for element-wise ops. |

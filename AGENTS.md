@@ -13,7 +13,7 @@ The canonical design document is this file plus `docs/`. `docs/releasing.md` cov
 | `src/torchshapeflow/rules/` | Shape inference functions (one concern per module) |
 | `src/torchshapeflow/diagnostics.py` | Diagnostic dataclass and Severity type |
 | `src/torchshapeflow/report.py` | FileReport and HoverFact |
-| `src/torchshapeflow/cli.py` | Typer CLI (`tsf check`, `tsf version`) |
+| `src/torchshapeflow/cli.py` | `argparse` CLI (`tsf check`, `tsf version`) |
 | `src/torchshapeflow/annotations.py` | Public `Shape` class |
 | `tests/` | Pytest test suite |
 | `examples/` | Runnable examples for manual and CI testing |
@@ -32,7 +32,7 @@ make check         # format + lint + typecheck + tests  ← run before every PR
 make test          # uv run pytest -q
 make lint          # ruff check . --fix
 make format        # ruff format .
-make typecheck     # mypy .
+make typecheck     # uv run ty check
 make docs          # mkdocs build
 make docs-serve    # mkdocs serve  (localhost:8000)
 make build         # python-dist + extension-package
@@ -61,7 +61,7 @@ make clean         # remove build and cache artifacts
 - Inference functions return `None` on failure — never raise.
 - Diagnostics use stable codes: `TSF1001`, `TSF1002`, ...
 - `make check` must pass before a PR is merged (it runs exactly what CI runs).
-- No `Any` without justification. `mypy --strict` must pass.
+- No `Any` without justification. `uv run ty check` must pass.
 - Prefer a single source of truth in both code and docs. Factor shared logic
   instead of duplicating it, and link to canonical documentation rather than
   restating support details in multiple places.

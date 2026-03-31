@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from torchshapeflow.cli import app
+from torchshapeflow.cli import entrypoint
 
 if __name__ == "__main__":
-    app()
+    entrypoint()

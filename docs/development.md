@@ -17,7 +17,7 @@ make check     # format + lint + typecheck + tests  ← run before every PR
 make test      # tests only: uv run pytest -q  (xdist parallel by default)
 make format    # ruff format .
 make lint      # ruff check . --fix
-make typecheck # mypy .
+make typecheck # uv run ty check
 ```
 
 `make check` runs exactly what CI runs. If it passes locally it will pass in CI.
@@ -36,7 +36,7 @@ make typecheck # mypy .
 | `install` | `uv sync --extra dev` | Install all dependencies including dev extras |
 | `format` | `ruff format .` | Auto-format source |
 | `lint` | `ruff check . --fix` | Lint and auto-fix |
-| `typecheck` | `mypy .` | Type-check with strict mypy |
+| `typecheck` | `uv run ty check` | Type-check with ty |
 | `test` | `uv run pytest -q` | Run test suite (pytest-xdist parallel by default) |
 | `check` | format + lint + typecheck + test | Full local CI pass |
 | `docs` | `mkdocs build` | Build documentation site into `site/` |

@@ -27,7 +27,7 @@ lint:
 	uv run ruff check . --fix
 
 typecheck:
-	uv run mypy .
+	uv run ty check
 
 test:
 	uv run pytest -q
@@ -67,4 +67,4 @@ bump-major:
 	uv lock
 
 clean:
-	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist site extensions/vscode/bin extensions/vscode/dist extensions/vscode/out
+	rm -rf .pytest_cache .mypy_cache .ruff_cache .ty_cache build dist site extensions/vscode/bin extensions/vscode/dist extensions/vscode/out
