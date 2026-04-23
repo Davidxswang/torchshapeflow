@@ -37,6 +37,8 @@ dev = [
   "pytest-xdist>=3.8.0",
   "ruff>=0.15.6",
   "ty>=0.0.1a19",
+  "pygments>=2.20.0",
+  "pymdown-extensions>=10.21.2",
 ]
 examples = [
   "torch>=2.10.0",
