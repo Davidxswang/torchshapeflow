@@ -167,9 +167,17 @@ Suggestions are emitted only when every precondition holds:
 
 - At least one parameter has a `Shape` annotation (you opted in).
 - The function has no return annotation yet.
+- Every exit path provably returns a value. Recognized terminators are a
+  trailing `return X`, a trailing `raise`, and `if/else` where every
+  branch terminates. Loops, `try/except`, `match`, and bare `return` are
+  treated as "don't know" and silence the suggestion.
 - Every `return` statement produces a tensor with the same shape.
 - Every dimension is expressible in `Shape(...)` syntax (symbolic names
   and integer constants).
+- The first annotated parameter uses an inline `Annotated[..., Shape(...)]`
+  or `Annotated[..., "B T D"]` spelling — the suggestion reuses its form
+  so the proposed annotation refers only to names the file already
+  imports. `TypeAlias` params skip the suggestion.
 
 Anything outside this envelope is silently skipped — a function without a
 suggestion is not an error.

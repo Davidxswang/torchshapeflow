@@ -6,7 +6,11 @@ from torchshapeflow.analyzer import analyze_source
 
 
 def test_suggest_return_annotation_symbolic_shape() -> None:
-    """Params annotated, no return annotation, body tracks — suggestion emitted."""
+    """Params annotated, no return annotation, body tracks — suggestion emitted.
+
+    Annotation uses ``ast.unparse`` output (single-quoted strings) so that
+    downstream tooling gets a parse-stable rendering.
+    """
     source = """
 from typing import Annotated
 import torch
@@ -25,7 +29,7 @@ def scores(
     assert sug.kind == "return_annotation"
     assert sug.function == "scores"
     assert sug.shape == "[B, H, T, T]"
-    assert sug.annotation == 'Annotated[torch.Tensor, Shape("B", "H", "T", "T")]'
+    assert sug.annotation == "Annotated[torch.Tensor, Shape('B', 'H', 'T', 'T')]"
 
 
 def test_suggest_return_annotation_mixed_const_symbolic() -> None:
@@ -49,7 +53,7 @@ class M(nn.Module):
     # forward should get a return suggestion; __init__ is not annotated and is skipped.
     suggestions = [s for s in report.suggestions if s.function == "forward"]
     assert len(suggestions) == 1
-    assert suggestions[0].annotation == 'Annotated[torch.Tensor, Shape("B", "T", 256)]'
+    assert suggestions[0].annotation == "Annotated[torch.Tensor, Shape('B', 'T', 256)]"
 
 
 def test_no_suggestion_when_return_annotation_present() -> None:
@@ -173,7 +177,195 @@ def fn(x: Annotated[torch.Tensor, Shape("B",)]):
     sug_payload = report.suggestions[0].to_dict()
     assert sug_payload["kind"] == "return_annotation"
     assert sug_payload["function"] == "fn"
-    assert sug_payload["annotation"] == 'Annotated[torch.Tensor, Shape("B")]'
+    assert sug_payload["annotation"] == "Annotated[torch.Tensor, Shape('B')]"
     report_payload = report.to_dict()
     assert "suggestions" in report_payload
     assert report_payload["suggestions"] == [sug_payload]
+
+
+# ---------------------------------------------------------------------------
+# Control-flow safety (P1 review fix): only suggest when every path returns.
+
+
+def test_no_suggestion_when_if_lacks_else_implicit_fallthrough() -> None:
+    """An `if` without `else` lets the function fall through to None — no suggest."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)], flag: bool):
+    if flag:
+        return x
+    # falls through — runtime returns None
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_no_suggestion_when_mixed_with_bare_return() -> None:
+    """A bare `return` on any path means the function can return None."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)], flag: bool):
+    if flag:
+        return x
+    return
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_suggest_when_if_else_both_branches_return() -> None:
+    """Exhaustive if/else with tensor returns in both branches does suggest."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B", "T")], flag: bool):
+    if flag:
+        return x
+    else:
+        return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+    assert report.suggestions[0].annotation == "Annotated[torch.Tensor, Shape('B', 'T')]"
+
+
+def test_suggest_when_trailing_raise_backstops_return() -> None:
+    """Function returns on some paths and raises on the rest — still safe to suggest."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)], flag: bool):
+    if flag:
+        return x
+    raise ValueError("flag must be set")
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+
+
+def test_no_suggestion_when_only_terminal_is_while_loop() -> None:
+    """Loops aren't analyzed; don't guess whether they always return."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    while True:
+        return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_no_suggestion_when_only_terminal_is_try_except() -> None:
+    """try/except isn't analyzed for termination; skip."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    try:
+        return x
+    except Exception:
+        return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+# ---------------------------------------------------------------------------
+# Import-safe rendering (P2 review fix): reuse the caller's annotation spelling.
+
+
+def test_suggestion_preserves_from_torch_import_tensor_spelling() -> None:
+    """When the user wrote `Annotated[Tensor, ...]`, the suggestion keeps `Tensor`.
+
+    Emitting `torch.Tensor` would reference a name the target file never imported.
+    """
+    source = """
+from typing import Annotated
+from torch import Tensor
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[Tensor, Shape("B", "T")]):
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+    annotation = report.suggestions[0].annotation
+    assert annotation == "Annotated[Tensor, Shape('B', 'T')]"
+    # Defense-in-depth: the broken form must not appear.
+    assert "torch.Tensor" not in annotation
+
+
+def test_suggestion_preserves_qualified_annotated() -> None:
+    """`typing.Annotated[...]` param → suggestion keeps the qualified spelling."""
+    source = """
+import typing
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: typing.Annotated[torch.Tensor, Shape("B", "T")]):
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+    assert report.suggestions[0].annotation == ("typing.Annotated[torch.Tensor, Shape('B', 'T')]")
+
+
+def test_suggestion_preserves_string_shorthand_form() -> None:
+    """`Annotated[Tensor, "B T"]` string shorthand → suggestion uses the same form."""
+    source = """
+from typing import Annotated
+import torch
+
+
+def fn(x: Annotated[torch.Tensor, "B T 768"]):
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+    annotation = report.suggestions[0].annotation
+    assert annotation == "Annotated[torch.Tensor, 'B T 768']"
+
+
+def test_no_suggestion_when_param_uses_typealias() -> None:
+    """A TypeAlias param (`x: Batch`) gives no inline template; skip.
+
+    Building a suggestion would require expanding the alias to `Annotated[...]`
+    with names that may or may not be in scope. Under-propose instead.
+    """
+    source = """
+from typing import Annotated, TypeAlias
+import torch
+from torchshapeflow import Shape
+
+
+Batch: TypeAlias = Annotated[torch.Tensor, Shape("B", "T")]
+
+
+def fn(x: Batch):
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []

@@ -89,7 +89,7 @@ def test_cli_suggest_emits_json(tmp_path: Path) -> None:
     suggestions = payload["files"][0]["suggestions"]
     assert len(suggestions) == 1
     assert suggestions[0]["function"] == "fn"
-    assert suggestions[0]["annotation"] == ('Annotated[torch.Tensor, Shape("B", "T", 768)]')
+    assert suggestions[0]["annotation"] == ("Annotated[torch.Tensor, Shape('B', 'T', 768)]")
     # The command is read-only: source on disk is unchanged.
     assert target.read_text(encoding="utf-8") == source
 

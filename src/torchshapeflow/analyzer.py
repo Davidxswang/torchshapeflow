@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -983,22 +984,113 @@ def _emit_function_annotation_hovers(function: ast.FunctionDef, context: ModuleC
         _emit_signature_hover(function, tensor_params, return_shape, [], context)
 
 
-def _shape_to_annotation_source(shape: TensorShape) -> str | None:
-    """Render a shape as the inner-args string of a ``Shape(...)`` call.
+def _body_terminates_with_return(body: list[ast.stmt]) -> bool:
+    """True iff *body* provably ends by returning a value.
 
-    Returns None when any dim cannot round-trip through ``Shape(...)`` (only
-    symbolic names and integer constants are accepted by the parser;
-    ExpressionDim / UnknownDim are output-only).
+    Recognizes:
+    - A trailing ``return X`` (with value) at the end of the body.
+    - A trailing ``raise`` (function exits without falling through to None).
+    - A trailing ``if`` with ``else`` where every branch terminates.
+
+    Loops, ``try``/``except``, ``match``, and bare ``return`` (no value) yield
+    False — an honest "don't know" that keeps ``tsf suggest`` silent rather
+    than asserting a shape contract the analyzer cannot prove.
     """
-    parts: list[str] = []
-    for dim in shape.dims:
-        if isinstance(dim, ConstantDim):
-            parts.append(str(dim.value))
-        elif isinstance(dim, SymbolicDim):
-            parts.append(f'"{dim.name}"')
-        else:
-            return None
-    return ", ".join(parts)
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, ast.Return) and last.value is not None:
+        return True
+    if isinstance(last, ast.Raise):
+        return True
+    if isinstance(last, ast.If) and last.orelse:
+        return _body_terminates_with_return(last.body) and _body_terminates_with_return(last.orelse)
+    return False
+
+
+def _first_annotated_param_template(
+    function: ast.FunctionDef,
+    tensor_param_names: set[str],
+) -> ast.expr | None:
+    """Return the annotation AST of the first param recognized as a Shape contract.
+
+    That annotation is already known to parse (the caller filtered to params
+    that produced a TensorValue), so its constituent names — ``Annotated``,
+    the tensor type, ``Shape`` — all resolve in the target file. The
+    suggestion renderer reuses this AST as a style template, guaranteeing
+    that the proposed annotation uses only in-scope names.
+    """
+    for arg in function.args.args:
+        if arg.arg in tensor_param_names and arg.annotation is not None:
+            return arg.annotation
+    return None
+
+
+def _rebuild_shape_metadata(
+    original: ast.expr,
+    shape: TensorShape,
+) -> ast.expr | None:
+    """Rebuild a ``Shape(...)`` call or string-shorthand with *shape*'s dims.
+
+    Returns None when *original* is neither form, or when any dim cannot be
+    expressed as a parser-accepted arg (``ExpressionDim`` / ``UnknownDim``).
+    """
+    if isinstance(original, ast.Call):
+        new_args: list[ast.expr] = []
+        for dim in shape.dims:
+            if isinstance(dim, ConstantDim):
+                new_args.append(ast.Constant(value=dim.value))
+            elif isinstance(dim, SymbolicDim):
+                new_args.append(ast.Constant(value=dim.name))
+            else:
+                return None
+        # Preserve original.func so spellings like ``torchshapeflow.Shape(...)``
+        # survive — we only swap the args.
+        return ast.Call(
+            func=copy.deepcopy(original.func),
+            args=new_args,
+            keywords=[],
+        )
+    if isinstance(original, ast.Constant) and isinstance(original.value, str):
+        parts: list[str] = []
+        for dim in shape.dims:
+            if isinstance(dim, ConstantDim):
+                parts.append(str(dim.value))
+            elif isinstance(dim, SymbolicDim):
+                parts.append(dim.name)
+            else:
+                return None
+        return ast.Constant(value=" ".join(parts))
+    return None
+
+
+def _render_return_annotation_from_template(
+    template: ast.expr,
+    shape: TensorShape,
+) -> str | None:
+    """Render an ``Annotated[..., Shape(...)]`` source string for *shape*,
+    reusing *template*'s spelling so the suggestion refers only to names the
+    target file has already imported.
+
+    Returns None when the template isn't an ``Annotated[...]`` subscript with
+    a rewritable metadata slot (``Shape(...)`` call or string shorthand). This
+    includes TypeAlias-annotated params (``x: Batch``) — under the
+    propose-don't-decide principle, skipping is strictly better than emitting
+    source that may not parse in the caller's file.
+    """
+    if not isinstance(template, ast.Subscript):
+        return None
+    slice_node = template.slice
+    if not isinstance(slice_node, ast.Tuple) or len(slice_node.elts) < 2:
+        return None
+    new_metadata = _rebuild_shape_metadata(slice_node.elts[1], shape)
+    if new_metadata is None:
+        return None
+    rebuilt = copy.deepcopy(template)
+    assert isinstance(rebuilt, ast.Subscript)
+    assert isinstance(rebuilt.slice, ast.Tuple)
+    rebuilt.slice.elts[1] = new_metadata
+    return ast.unparse(rebuilt)
 
 
 def _maybe_suggest_return_annotation(
@@ -1008,17 +1100,24 @@ def _maybe_suggest_return_annotation(
     collected_returns: list[TensorValue | None],
     context: ModuleContext,
 ) -> None:
-    """Propose a return annotation when the analyzer already knows the shape.
+    """Propose a return annotation when the analyzer can verify the shape.
 
-    Emits a suggestion when every precondition holds:
+    Emits a suggestion only when every precondition holds:
+
     - At least one parameter has a ``Shape`` annotation (user opted in).
     - The function has no return annotation at all (``function.returns`` is None).
-    - The body contains at least one ``return`` statement.
-    - Every return expression produced a ``TensorValue`` with the same shape.
-    - Every dim is expressible in ``Shape(...)`` syntax.
+    - ``_body_terminates_with_return`` proves every exit path returns a value
+      (guards against implicit fallthrough → None and bare ``return``).
+    - Every collected return expression produced a ``TensorValue`` with the
+      same shape.
+    - The shape is expressible in ``Shape(...)`` syntax (no ExpressionDim /
+      UnknownDim).
+    - ``_render_return_annotation_from_template`` can reuse the first
+      annotated param's spelling (guards against names not in scope).
 
-    The caller (analyzer) is responsible for invoking this only for annotated
-    functions. TSF never writes these suggestions back — it is a proposal.
+    Skipping when any precondition fails is intentional: under the
+    propose-don't-decide principle, missing a legitimate suggestion is
+    strictly better than emitting one that is false or won't parse.
     """
     if not tensor_params:
         return
@@ -1033,12 +1132,15 @@ def _maybe_suggest_return_annotation(
     unique_shapes = {str(r.shape) for r in collected_returns if r is not None}
     if len(unique_shapes) != 1:
         return
-    inferred = next(r for r in collected_returns if r is not None)
-    inner = _shape_to_annotation_source(inferred.shape)
-    if inner is None:
+    if not _body_terminates_with_return(function.body):
         return
-    annotation = f"Annotated[torch.Tensor, Shape({inner})]"
-    # Position at the function name token (same convention as signature hovers).
+    inferred = next(r for r in collected_returns if r is not None)
+    template = _first_annotated_param_template(function, {name for name, _ in tensor_params})
+    if template is None:
+        return
+    annotation = _render_return_annotation_from_template(template, inferred.shape)
+    if annotation is None:
+        return
     name_col = function.col_offset + 4
     name_end_col = name_col + len(function.name)
     context.suggestions.append(
