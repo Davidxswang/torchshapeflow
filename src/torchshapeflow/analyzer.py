@@ -984,6 +984,29 @@ def _emit_function_annotation_hovers(function: ast.FunctionDef, context: ModuleC
         _emit_signature_hover(function, tensor_params, return_shape, [], context)
 
 
+def _contains_top_level_yield(body: list[ast.stmt]) -> bool:
+    """True iff *body* contains a ``yield`` or ``yield from`` at its own scope.
+
+    A ``yield`` in the outer function makes that function a generator — calling
+    it returns a ``Generator[...]`` object, never the tensor the ``return``
+    statement names (which becomes the ``StopIteration`` value). We must not
+    propose a plain-tensor return annotation for generators.
+
+    Walks the statement tree but does not descend into nested ``def``,
+    ``async def``, or ``lambda`` bodies: a yield inside one of those makes the
+    inner callable a generator, not the outer one.
+    """
+    stack: list[ast.AST] = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return False
+
+
 def _body_terminates_with_return(body: list[ast.stmt]) -> bool:
     """True iff *body* provably ends by returning a value.
 
@@ -1131,6 +1154,8 @@ def _maybe_suggest_return_annotation(
         return
     unique_shapes = {str(r.shape) for r in collected_returns if r is not None}
     if len(unique_shapes) != 1:
+        return
+    if _contains_top_level_yield(function.body):
         return
     if not _body_terminates_with_return(function.body):
         return

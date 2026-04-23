@@ -171,6 +171,10 @@ Suggestions are emitted only when every precondition holds:
   trailing `return X`, a trailing `raise`, and `if/else` where every
   branch terminates. Loops, `try/except`, `match`, and bare `return` are
   treated as "don't know" and silence the suggestion.
+- The function is not a generator. A `yield` or `yield from` in the body
+  makes the runtime return a `Generator[...]` object, not a tensor, so
+  suggesting a plain tensor return would be false. Nested `def`s with
+  their own `yield` are safe — only the outer body is checked.
 - Every `return` statement produces a tensor with the same shape.
 - Every dimension is expressible in `Shape(...)` syntax (symbolic names
   and integer constants).

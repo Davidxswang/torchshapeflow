@@ -369,3 +369,99 @@ def fn(x: Batch):
 """
     report = analyze_source(source, Path("m.py"))
     assert report.suggestions == []
+
+
+# ---------------------------------------------------------------------------
+# Generator guard (review fix): a yield makes the function return Generator[...].
+
+
+def test_no_suggestion_for_generator_with_yield() -> None:
+    """A `yield` in the body makes this a generator — never suggest a tensor return."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    yield x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_no_suggestion_for_generator_with_yield_from() -> None:
+    """`yield from` is equally generator-making."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    yield from [x, x]
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_no_suggestion_for_generator_with_trailing_return() -> None:
+    """The specific case Codex flagged: yield + trailing `return X`.
+
+    Without the generator guard, this satisfied every other precondition and
+    would be proposed as `-> Annotated[Tensor, Shape('B')]` — which is false,
+    because calling the function returns a Generator, not a tensor.
+    """
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    yield x
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert report.suggestions == []
+
+
+def test_suggestion_ignores_yield_inside_nested_def() -> None:
+    """A yield inside a nested `def` makes that nested function a generator,
+    not the outer one. The outer function is still a normal return and may
+    receive a suggestion.
+    """
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    def _inner():
+        yield x
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    # The outer fn's return suggestion should still emit.
+    outer_suggestions = [s for s in report.suggestions if s.function == "fn"]
+    assert len(outer_suggestions) == 1
+    assert outer_suggestions[0].annotation == "Annotated[torch.Tensor, Shape('B')]"
+
+
+def test_suggestion_allows_generator_expression_in_body() -> None:
+    """A generator expression `(x for x in ...)` does not use ast.Yield — it's
+    a GeneratorExp literal. Functions using one are not generator functions."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+def fn(x: Annotated[torch.Tensor, Shape("B",)]):
+    _ = list(i for i in range(3))
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    assert len(report.suggestions) == 1
+    assert report.suggestions[0].annotation == "Annotated[torch.Tensor, Shape('B')]"
