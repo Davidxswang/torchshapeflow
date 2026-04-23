@@ -46,7 +46,15 @@ TorchShapeFlow is shape-only by design. `DType`, `Device`, `Layout`, and distrib
 
 - Executing user code to infer shapes
 - Runtime instrumentation or tracing
+- Resolving config objects (`cfg.d_model`, CLI flags, YAML) into concrete
+  dimensions — config-driven sizes stay symbolic
+- Inferring shapes of tensors produced by runtime data loading (`torch.load`,
+  `Dataset.__getitem__`, disk-backed stores like HDF5/Parquet) — these shapes
+  live on disk, not in source
 - TorchScript, `torch.compile`, or `torch.fx` integration
 - Full language-server functionality
 - Auto-fixing user code
 - Perfect soundness for highly dynamic code
+
+See [Annotation Syntax — Why annotate?](syntax.md#why-annotate) for the
+rationale behind these non-goals.
