@@ -96,6 +96,28 @@ handled the same way when they can be resolved through `ProjectIndex`.
 | `TSF2002` | warning | Call to unannotated function with tensor arg — shape inference lost |
 | `TSF2003` | warning | Unresolvable module `self.xxx` — no spec inferred |
 
+### Diagnostic JSON schema
+
+Each diagnostic emitted by `tsf check --json` carries:
+
+- `code` — stable identifier (`TSF1007`, etc.)
+- `severity` — `"error"` or `"warning"`
+- `message` — one-line human-readable summary
+- `path`, `line`, `column` — location (1-based)
+
+Shape-mismatch diagnostics additionally carry three optional **structured
+fields** for machine consumption:
+
+- `expected` — what the analyzer expected (e.g. `"last dim = 768"`)
+- `actual` — what it saw (e.g. `"[B, T, 512] (last dim = 512)"`)
+- `hint` — a concrete suggested fix (e.g. `"change in_features to 512, or reshape the input so its last dim equals 768"`)
+
+When present, these fields are the **source of truth**; the prose `message`
+is rendered from them by `diagnostics.render_message`. Agents and editors
+should prefer the structured fields over parsing the message. The fields are
+omitted when a diagnostic does not produce useful structured context (e.g.
+parse errors).
+
 ## Adding a new operator
 
 See [Development → Adding a new operator](development.md#adding-a-new-operator).

@@ -464,6 +464,61 @@ def fn(x: Annotated[torch.Tensor, Shape(4, 8)],
     assert any(d.code == "TSF1003" for d in report.diagnostics)
 
 
+def test_tsf1003_mm_carries_structured_fields() -> None:
+    """TSF1003 for torch.mm exposes expected/actual/hint for agents and editors."""
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+def fn(x: Annotated[torch.Tensor, Shape(4, 8)],
+       y: Annotated[torch.Tensor, Shape(9, 16)]):
+    z = torch.mm(x, y)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    mm_errors = [d for d in report.diagnostics if d.code == "TSF1003"]
+    assert mm_errors, "expected at least one TSF1003 diagnostic"
+    diag = mm_errors[0]
+    assert diag.expected is not None and "rank-2" in diag.expected
+    assert diag.actual is not None and "[4, 8]" in diag.actual and "[9, 16]" in diag.actual
+    assert diag.hint is not None
+    # Structured fields must round-trip through JSON dict output.
+    payload = diag.to_dict()
+    assert payload["expected"] == diag.expected
+    assert payload["actual"] == diag.actual
+    assert payload["hint"] == diag.hint
+
+
+def test_tsf1007_linear_carries_structured_fields() -> None:
+    """TSF1007 for nn.Linear exposes the expected/actual shapes and a hint."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+
+class M(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.Linear(768, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 512)]):
+        return self.fc(x)
+"""
+    report = analyze_source(source, Path("memory.py"))
+    errors = [d for d in report.diagnostics if d.code == "TSF1007"]
+    assert errors, "expected a TSF1007 Linear mismatch"
+    diag = errors[0]
+    assert diag.expected == "last dim = 768"
+    assert diag.actual is not None and "512" in diag.actual
+    assert diag.hint is not None and "768" in diag.hint
+    # The rendered prose message incorporates all structured fields.
+    assert "expected last dim = 768" in diag.message
+    assert "got" in diag.message
+    assert "hint:" in diag.message
+
+
 # ---------------------------------------------------------------------------
 # nn.Sequential
 # ---------------------------------------------------------------------------

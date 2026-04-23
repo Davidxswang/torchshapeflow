@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from torchshapeflow.diagnostics import Diagnostic, Severity
+from torchshapeflow.diagnostics import Diagnostic, Severity, render_message
 from torchshapeflow.index import (
     CustomModuleTemplate,
     FuncSig,
@@ -308,6 +308,38 @@ class ModuleContext:
                 line=getattr(node, "lineno", 1),
                 column=getattr(node, "col_offset", 0) + 1,
                 severity=severity,
+            )
+        )
+
+    def shape_error(
+        self,
+        node: ast.AST,
+        code: str,
+        summary: str,
+        *,
+        expected: str | None = None,
+        actual: str | None = None,
+        hint: str | None = None,
+        severity: Severity = "error",
+    ) -> None:
+        """Append a shape-mismatch diagnostic with structured fields.
+
+        Structured fields are the source of truth; the human-readable message
+        is rendered from them via ``render_message`` to keep prose and data in
+        sync. Agents and editors can consume ``expected`` / ``actual`` /
+        ``hint`` directly from JSON output.
+        """
+        self.diagnostics.append(
+            Diagnostic(
+                code=code,
+                message=render_message(summary, expected=expected, actual=actual, hint=hint),
+                path=self.path,
+                line=getattr(node, "lineno", 1),
+                column=getattr(node, "col_offset", 0) + 1,
+                severity=severity,
+                expected=expected,
+                actual=actual,
+                hint=hint,
             )
         )
 
@@ -1385,6 +1417,50 @@ def _bind_target(
             context.hover(target.id, target, value)
 
 
+def _emit_matmul_mismatch(
+    context: ModuleContext,
+    node: ast.AST,
+    op_label: str,
+    left: TensorValue,
+    right: TensorValue,
+) -> None:
+    """Emit a TSF1003 diagnostic for matmul/bmm-family shape mismatches."""
+    context.shape_error(
+        node,
+        "TSF1003",
+        f"Incompatible {op_label} shapes",
+        expected=(
+            "last dim of left to equal second-to-last dim of right"
+            " (with broadcast-compatible batch dims)"
+        ),
+        actual=f"left={left.shape}, right={right.shape}",
+        hint=(
+            "transpose one operand with .transpose(-2, -1), or adjust an upstream"
+            " layer so the inner dimensions agree"
+        ),
+    )
+
+
+def _emit_mm_mismatch(
+    context: ModuleContext,
+    node: ast.AST,
+    left: TensorValue,
+    right: TensorValue,
+) -> None:
+    """Emit a TSF1003 diagnostic for torch.mm / Tensor.mm shape mismatches."""
+    context.shape_error(
+        node,
+        "TSF1003",
+        "Incompatible mm shapes",
+        expected="two rank-2 tensors (M, N) and (N, K)",
+        actual=f"left={left.shape}, right={right.shape}",
+        hint=(
+            "mm requires strict 2D tensors with matching inner dim;"
+            " use matmul for broadcasting or reshape the operands"
+        ),
+    )
+
+
 def _eval_expr(
     node: ast.AST,
     env: dict[str, Value],
@@ -1454,7 +1530,7 @@ def _eval_expr(
         if isinstance(left, TensorValue) and isinstance(right, TensorValue):
             result = infer_matmul(left, right)
             if result is None:
-                context.error(node, "TSF1003", "Incompatible matmul shapes.")
+                _emit_matmul_mismatch(context, node, "@ (matmul)", left, right)
             return result
         return None
     if isinstance(node, ast.Call):
@@ -1486,7 +1562,36 @@ def _apply_module_spec(
                 )
         result = infer_linear(spec, tensor)
         if result is None:
-            context.error(node, "TSF1007", "nn.Linear input shape mismatch.")
+            if tensor.rank == 0:
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.Linear input shape mismatch",
+                    expected="rank ≥ 1",
+                    actual="rank-0 tensor (scalar)",
+                    hint="nn.Linear requires a tensor with at least one dimension",
+                )
+            else:
+                last = tensor.shape.dims[-1]
+                expected_str = (
+                    f"last dim = {spec.in_features}"
+                    if spec.in_features is not None
+                    else "last dim to match in_features"
+                )
+                hint = (
+                    f"change nn.Linear(in_features=...) to {render_dim(last)},"
+                    f" or reshape the input so its last dim equals {spec.in_features}"
+                    if spec.in_features is not None
+                    else "ensure the input's last dim matches in_features"
+                )
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.Linear input shape mismatch",
+                    expected=expected_str,
+                    actual=f"{tensor.shape} (last dim = {render_dim(last)})",
+                    hint=hint,
+                )
         return result
     if isinstance(spec, Conv2dSpec):
         if spec.in_channels is not None and tensor.rank == 4:
@@ -1502,7 +1607,36 @@ def _apply_module_spec(
                 )
         result = infer_conv2d(spec, tensor)
         if result is None:
-            context.error(node, "TSF1007", "nn.Conv2d input shape mismatch.")
+            if tensor.rank != 4:
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.Conv2d input shape mismatch",
+                    expected="rank-4 tensor (N, C, H, W)",
+                    actual=f"rank-{tensor.rank} tensor {tensor.shape}",
+                    hint="nn.Conv2d requires a 4D input; add batch / channel dims if missing",
+                )
+            else:
+                ch = tensor.shape.dims[1]
+                expected_str = (
+                    f"channels dim = {spec.in_channels}"
+                    if spec.in_channels is not None
+                    else "channels dim to match in_channels"
+                )
+                hint = (
+                    f"change nn.Conv2d(in_channels=...) to {render_dim(ch)},"
+                    f" or reshape the input so dim 1 equals {spec.in_channels}"
+                    if spec.in_channels is not None
+                    else "ensure the input's channel dim matches in_channels"
+                )
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.Conv2d input shape mismatch",
+                    expected=expected_str,
+                    actual=f"{tensor.shape} (channels dim = {render_dim(ch)})",
+                    hint=hint,
+                )
         return result
     if isinstance(spec, PassthroughSpec):
         return tensor
@@ -1511,7 +1645,14 @@ def _apply_module_spec(
     if isinstance(spec, Pool2dSpec):
         result = infer_pool2d(spec, tensor)
         if result is None:
-            context.error(node, "TSF1007", "nn.MaxPool2d/AvgPool2d requires rank-4 input.")
+            context.shape_error(
+                node,
+                "TSF1007",
+                "nn.MaxPool2d/AvgPool2d input shape mismatch",
+                expected="rank-4 tensor (N, C, H, W)",
+                actual=f"rank-{tensor.rank} tensor {tensor.shape}",
+                hint="2D pooling layers require a 4D input; add batch / channel dims if missing",
+            )
         return result
     if isinstance(spec, CustomModuleSpec):
         if spec.input_shape is None or spec.return_shape is None:
@@ -1577,7 +1718,41 @@ def _apply_module_spec(
                 )
         lstm_out = infer_lstm(spec, tensor)
         if lstm_out is None:
-            context.error(node, "TSF1007", "nn.LSTM input shape mismatch.")
+            if tensor.rank != 3:
+                expected_layout = (
+                    "rank-3 tensor (N, L, input_size)"
+                    if spec.batch_first
+                    else "rank-3 tensor (L, N, input_size)"
+                )
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.LSTM input shape mismatch",
+                    expected=expected_layout,
+                    actual=f"rank-{tensor.rank} tensor {tensor.shape}",
+                    hint="nn.LSTM requires a 3D input; check batch_first to confirm dim order",
+                )
+            else:
+                last = tensor.shape.dims[-1]
+                expected_str = (
+                    f"last dim = {spec.input_size}"
+                    if spec.input_size is not None
+                    else "last dim to match input_size"
+                )
+                hint = (
+                    f"change nn.LSTM(input_size=...) to {render_dim(last)},"
+                    f" or reshape the input so its last dim equals {spec.input_size}"
+                    if spec.input_size is not None
+                    else "ensure the input's last dim matches input_size"
+                )
+                context.shape_error(
+                    node,
+                    "TSF1007",
+                    "nn.LSTM input shape mismatch",
+                    expected=expected_str,
+                    actual=f"{tensor.shape} (last dim = {render_dim(last)})",
+                    hint=hint,
+                )
         return lstm_out
     return None
 
@@ -1762,7 +1937,8 @@ def _eval_call(
             if isinstance(left, TensorValue) and isinstance(right, TensorValue):
                 result = infer_matmul(left, right)
                 if result is None:
-                    context.error(node, "TSF1003", "Incompatible matmul shapes.")
+                    op_label = "bmm" if callee_name.endswith("bmm") else "matmul"
+                    _emit_matmul_mismatch(context, node, op_label, left, right)
                 return result
     if callee_name.endswith(".mm") or callee_name == "mm":
         if len(node.args) >= 2:
@@ -1771,7 +1947,7 @@ def _eval_call(
             if isinstance(left, TensorValue) and isinstance(right, TensorValue):
                 result = infer_mm(left, right)
                 if result is None:
-                    context.error(node, "TSF1003", "Incompatible mm shapes.")
+                    _emit_mm_mismatch(context, node, left, right)
                 return result
     if callee_name.endswith(".movedim") or callee_name == "movedim":
         if len(node.args) >= 3:
@@ -1798,7 +1974,18 @@ def _eval_call(
             if len(tensor_list) == len(tensor_arg_nodes) and "->" in subscript_str:
                 result = infer_einsum(subscript_str, tensor_list)
                 if result is None:
-                    context.error(node, "TSF1003", "Incompatible einsum shapes.")
+                    shapes_str = ", ".join(str(t.shape) for t in tensor_list)
+                    context.shape_error(
+                        node,
+                        "TSF1003",
+                        "Incompatible einsum shapes",
+                        expected=f"shapes consistent with subscript '{subscript_str}'",
+                        actual=f"tensors: {shapes_str}",
+                        hint=(
+                            "check that each letter in the subscript maps to a consistent "
+                            "size across all operands"
+                        ),
+                    )
                 return result
     # F.interpolate(x, size=(H, W)) / F.interpolate(x, scale_factor=2.0).
     if callee_name.endswith("interpolate") and node.args:
@@ -2028,14 +2215,14 @@ def _eval_tensor_method(
         if isinstance(right, TensorValue):
             result = infer_matmul(tensor, right)
             if result is None:
-                context.error(node, "TSF1003", "Incompatible matmul shapes.")
+                _emit_matmul_mismatch(context, node, "matmul", tensor, right)
             return result
     if name == "mm" and node.args:
         right = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(right, TensorValue):
             result = infer_mm(tensor, right)
             if result is None:
-                context.error(node, "TSF1003", "Incompatible mm shapes.")
+                _emit_mm_mismatch(context, node, tensor, right)
             return result
     if name in _REDUCTION_OPS:
         rdim = _reduction_dim(node, arg_offset=0)
