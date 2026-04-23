@@ -1572,25 +1572,20 @@ def _apply_module_spec(
                     hint="nn.Linear requires a tensor with at least one dimension",
                 )
             else:
+                # infer_linear only returns None with rank>=1 when in_features
+                # is a literal int and the last dim is a ConstantDim that
+                # differs. Both are therefore concrete here.
                 last = tensor.shape.dims[-1]
-                expected_str = (
-                    f"last dim = {spec.in_features}"
-                    if spec.in_features is not None
-                    else "last dim to match in_features"
-                )
-                hint = (
-                    f"change nn.Linear(in_features=...) to {render_dim(last)},"
-                    f" or reshape the input so its last dim equals {spec.in_features}"
-                    if spec.in_features is not None
-                    else "ensure the input's last dim matches in_features"
-                )
                 context.shape_error(
                     node,
                     "TSF1007",
                     "nn.Linear input shape mismatch",
-                    expected=expected_str,
+                    expected=f"last dim = {spec.in_features}",
                     actual=f"{tensor.shape} (last dim = {render_dim(last)})",
-                    hint=hint,
+                    hint=(
+                        f"change nn.Linear(in_features=...) to {render_dim(last)},"
+                        f" or reshape the input so its last dim equals {spec.in_features}"
+                    ),
                 )
         return result
     if isinstance(spec, Conv2dSpec):
@@ -1617,25 +1612,20 @@ def _apply_module_spec(
                     hint="nn.Conv2d requires a 4D input; add batch / channel dims if missing",
                 )
             else:
+                # With rank==4, infer_conv2d only returns None when
+                # in_channels is a literal int and the channel dim is a
+                # ConstantDim that differs. Both are concrete here.
                 ch = tensor.shape.dims[1]
-                expected_str = (
-                    f"channels dim = {spec.in_channels}"
-                    if spec.in_channels is not None
-                    else "channels dim to match in_channels"
-                )
-                hint = (
-                    f"change nn.Conv2d(in_channels=...) to {render_dim(ch)},"
-                    f" or reshape the input so dim 1 equals {spec.in_channels}"
-                    if spec.in_channels is not None
-                    else "ensure the input's channel dim matches in_channels"
-                )
                 context.shape_error(
                     node,
                     "TSF1007",
                     "nn.Conv2d input shape mismatch",
-                    expected=expected_str,
+                    expected=f"channels dim = {spec.in_channels}",
                     actual=f"{tensor.shape} (channels dim = {render_dim(ch)})",
-                    hint=hint,
+                    hint=(
+                        f"change nn.Conv2d(in_channels=...) to {render_dim(ch)},"
+                        f" or reshape the input so dim 1 equals {spec.in_channels}"
+                    ),
                 )
         return result
     if isinstance(spec, PassthroughSpec):
@@ -1733,25 +1723,20 @@ def _apply_module_spec(
                     hint="nn.LSTM requires a 3D input; check batch_first to confirm dim order",
                 )
             else:
+                # With rank==3, infer_lstm only returns None when input_size
+                # is a literal int and the last dim is a ConstantDim that
+                # differs. Both are concrete here.
                 last = tensor.shape.dims[-1]
-                expected_str = (
-                    f"last dim = {spec.input_size}"
-                    if spec.input_size is not None
-                    else "last dim to match input_size"
-                )
-                hint = (
-                    f"change nn.LSTM(input_size=...) to {render_dim(last)},"
-                    f" or reshape the input so its last dim equals {spec.input_size}"
-                    if spec.input_size is not None
-                    else "ensure the input's last dim matches input_size"
-                )
                 context.shape_error(
                     node,
                     "TSF1007",
                     "nn.LSTM input shape mismatch",
-                    expected=expected_str,
+                    expected=f"last dim = {spec.input_size}",
                     actual=f"{tensor.shape} (last dim = {render_dim(last)})",
-                    hint=hint,
+                    hint=(
+                        f"change nn.LSTM(input_size=...) to {render_dim(last)},"
+                        f" or reshape the input so its last dim equals {spec.input_size}"
+                    ),
                 )
         return lstm_out
     return None
