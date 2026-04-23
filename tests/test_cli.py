@@ -68,3 +68,47 @@ def test_cli_version() -> None:
     exit_code, stdout = _run_cli("version")
     assert exit_code == 0
     assert stdout.strip()
+
+
+def test_cli_suggest_emits_json(tmp_path: Path) -> None:
+    """`tsf suggest` emits proposals as JSON without touching source."""
+    source = (
+        "from typing import Annotated\n"
+        "import torch\n"
+        "from torchshapeflow import Shape\n"
+        "\n"
+        "def fn(x: Annotated[torch.Tensor, Shape('B', 'T', 768)]):\n"
+        "    return x\n"
+    )
+    target = tmp_path / "m.py"
+    target.write_text(source, encoding="utf-8")
+    exit_code, stdout = _run_cli("suggest", str(target))
+    assert exit_code == 0
+    payload = json.loads(stdout)
+    assert len(payload["files"]) == 1
+    suggestions = payload["files"][0]["suggestions"]
+    assert len(suggestions) == 1
+    assert suggestions[0]["function"] == "fn"
+    assert suggestions[0]["annotation"] == ('Annotated[torch.Tensor, Shape("B", "T", 768)]')
+    # The command is read-only: source on disk is unchanged.
+    assert target.read_text(encoding="utf-8") == source
+
+
+def test_cli_suggest_clean_file_is_success(tmp_path: Path) -> None:
+    """A file with no opportunities returns an empty suggestions list and exit 0."""
+    source = (
+        "from typing import Annotated\n"
+        "import torch\n"
+        "from torchshapeflow import Shape\n"
+        "\n"
+        "def fn(\n"
+        "    x: Annotated[torch.Tensor, Shape('B',)],\n"
+        ") -> Annotated[torch.Tensor, Shape('B',)]:\n"
+        "    return x\n"
+    )
+    target = tmp_path / "m.py"
+    target.write_text(source, encoding="utf-8")
+    exit_code, stdout = _run_cli("suggest", str(target))
+    assert exit_code == 0
+    payload = json.loads(stdout)
+    assert payload["files"][0]["suggestions"] == []

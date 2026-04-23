@@ -40,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show per-file status for clean files.",
     )
 
+    suggest_parser = subparsers.add_parser(
+        "suggest",
+        help="Propose annotations TorchShapeFlow can already verify (JSON).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    suggest_parser.add_argument("path", type=Path, help="File or directory to analyze.")
+
     subparsers.add_parser(
         "version",
         help="Print the installed TorchShapeFlow version.",
@@ -63,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             json_output=namespace.json_output,
             verbose=namespace.verbose,
         )
+    if command == "suggest":
+        return _run_suggest(path=namespace.path)
     if command == "version":
         print(__version__)
         return 0
@@ -97,6 +106,28 @@ def _run_check(path: Path, json_output: bool, verbose: bool) -> int:
     lines.append(_summary(reports))
     print("\n".join(lines))
     return _exit_code(reports)
+
+
+def _run_suggest(path: Path) -> int:
+    """Emit JSON proposals for annotations TorchShapeFlow can already verify.
+
+    Suggestions are the analyzer's read-only proposals; TSF never writes them
+    back to source. The exit code is 0 regardless of whether suggestions exist
+    — a suggestion is not a failure, and a file with none is not an error.
+    """
+    project_index = ProjectIndex()
+    reports = [analyze_path(file_path, project_index) for file_path in collect_python_files(path)]
+    payload = {
+        "files": [
+            {
+                "path": report.path,
+                "suggestions": [item.to_dict() for item in report.suggestions],
+            }
+            for report in reports
+        ]
+    }
+    print(json.dumps(payload, indent=2))
+    return 0
 
 
 def _exit_code(reports: Sequence[FileReport]) -> int:

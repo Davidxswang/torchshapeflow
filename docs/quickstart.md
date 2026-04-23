@@ -128,6 +128,52 @@ TorchShapeFlow is opt-in: it only checks functions whose parameters carry
 Each step is incremental — you get value from the first annotation, and coverage
 grows as you add more.
 
+## Getting annotation proposals (`tsf suggest`)
+
+Once you have annotated parameters, the analyzer often already knows the
+return shape. Run:
+
+```bash
+tsf suggest path/to/mymodel.py
+```
+
+…and TorchShapeFlow emits JSON proposals for return annotations it can
+already verify, without touching your source. Example output:
+
+```json
+{
+  "files": [
+    {
+      "path": "model.py",
+      "suggestions": [
+        {
+          "line": 6, "column": 5,
+          "function": "scores",
+          "shape": "[B, H, T, T]",
+          "annotation": "Annotated[torch.Tensor, Shape(\"B\", \"H\", \"T\", \"T\")]",
+          "kind": "return_annotation"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Review each suggestion and paste it into your function definition. TSF
+**never writes suggestions back** — it proposes; you (or your editor/agent)
+decide.
+
+Suggestions are emitted only when every precondition holds:
+
+- At least one parameter has a `Shape` annotation (you opted in).
+- The function has no return annotation yet.
+- Every `return` statement produces a tensor with the same shape.
+- Every dimension is expressible in `Shape(...)` syntax (symbolic names
+  and integer constants).
+
+Anything outside this envelope is silently skipped — a function without a
+suggestion is not an error.
+
 ## Next steps
 
 - [Annotation syntax](syntax.md) — all supported annotation forms

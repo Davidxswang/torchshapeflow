@@ -49,7 +49,7 @@ from torchshapeflow.model import (
     sum_dim,
 )
 from torchshapeflow.parser import AnnotationParseError, parse_source, parse_tensor_annotation
-from torchshapeflow.report import FileReport, HoverFact
+from torchshapeflow.report import FileReport, HoverFact, Suggestion
 from torchshapeflow.rules import (
     infer_binary_broadcast,
     infer_cat,
@@ -276,6 +276,7 @@ class ModuleContext:
     path: Path
     diagnostics: list[Diagnostic] = field(default_factory=list)
     hovers: list[HoverFact] = field(default_factory=list)
+    suggestions: list[Suggestion] = field(default_factory=list)
     aliases: dict[str, TensorValue] = field(default_factory=dict)
     func_sigs: dict[str, FuncSig] = field(default_factory=dict)
     return_shape: TensorValue | None = None
@@ -411,7 +412,12 @@ def analyze_source(
             context.method_sigs = {}
             context.self_scalars = {}
             context.self_tensors = {}
-    return FileReport(path=str(path), diagnostics=context.diagnostics, hovers=context.hovers)
+    return FileReport(
+        path=str(path),
+        diagnostics=context.diagnostics,
+        hovers=context.hovers,
+        suggestions=context.suggestions,
+    )
 
 
 def _collect_class_specs(
@@ -963,6 +969,9 @@ def _analyze_function(
         _emit_signature_hover(
             function, tensor_params, context.return_shape, context.collected_returns, context
         )
+    _maybe_suggest_return_annotation(
+        function, tensor_params, context.return_shape, context.collected_returns, context
+    )
     context.collected_returns = old_collected_returns
     context.return_shape = old_return_shape
     context.in_annotated_function = old_in_annotated
@@ -972,6 +981,77 @@ def _emit_function_annotation_hovers(function: ast.FunctionDef, context: ModuleC
     _, _, tensor_params, return_shape = _collect_function_annotations(function, context)
     if tensor_params:
         _emit_signature_hover(function, tensor_params, return_shape, [], context)
+
+
+def _shape_to_annotation_source(shape: TensorShape) -> str | None:
+    """Render a shape as the inner-args string of a ``Shape(...)`` call.
+
+    Returns None when any dim cannot round-trip through ``Shape(...)`` (only
+    symbolic names and integer constants are accepted by the parser;
+    ExpressionDim / UnknownDim are output-only).
+    """
+    parts: list[str] = []
+    for dim in shape.dims:
+        if isinstance(dim, ConstantDim):
+            parts.append(str(dim.value))
+        elif isinstance(dim, SymbolicDim):
+            parts.append(f'"{dim.name}"')
+        else:
+            return None
+    return ", ".join(parts)
+
+
+def _maybe_suggest_return_annotation(
+    function: ast.FunctionDef,
+    tensor_params: list[tuple[str, TensorValue]],
+    declared_return: TensorValue | None,
+    collected_returns: list[TensorValue | None],
+    context: ModuleContext,
+) -> None:
+    """Propose a return annotation when the analyzer already knows the shape.
+
+    Emits a suggestion when every precondition holds:
+    - At least one parameter has a ``Shape`` annotation (user opted in).
+    - The function has no return annotation at all (``function.returns`` is None).
+    - The body contains at least one ``return`` statement.
+    - Every return expression produced a ``TensorValue`` with the same shape.
+    - Every dim is expressible in ``Shape(...)`` syntax.
+
+    The caller (analyzer) is responsible for invoking this only for annotated
+    functions. TSF never writes these suggestions back — it is a proposal.
+    """
+    if not tensor_params:
+        return
+    if function.returns is not None:
+        return
+    if declared_return is not None:
+        return
+    if not collected_returns:
+        return
+    if any(r is None for r in collected_returns):
+        return
+    unique_shapes = {str(r.shape) for r in collected_returns if r is not None}
+    if len(unique_shapes) != 1:
+        return
+    inferred = next(r for r in collected_returns if r is not None)
+    inner = _shape_to_annotation_source(inferred.shape)
+    if inner is None:
+        return
+    annotation = f"Annotated[torch.Tensor, Shape({inner})]"
+    # Position at the function name token (same convention as signature hovers).
+    name_col = function.col_offset + 4
+    name_end_col = name_col + len(function.name)
+    context.suggestions.append(
+        Suggestion(
+            line=function.lineno,
+            column=name_col + 1,
+            end_line=function.lineno,
+            end_column=name_end_col + 1,
+            function=function.name,
+            shape=str(inferred.shape),
+            annotation=annotation,
+        )
+    )
 
 
 def _collect_function_annotations(
