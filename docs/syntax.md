@@ -12,13 +12,23 @@ until you add an annotation — and that is the point. You decide which boundari
 matter, annotate those parameters, and let the tool verify consistency from
 there.
 
-Symbolic dimensions like `"B"`, `"T"`, `"D"` are the primary mechanism.
-In production deep-learning code, batch sizes and sequence lengths come from
-config objects at runtime — not from literals in the source. The analyzer does
-not try to chase config resolution. Instead, symbolic dims flow through
-operations, and the analyzer verifies that every operation is consistent with the
-declared shapes. Concrete integer dimensions (e.g. `3` for RGB channels, `768`
-for a known embedding size) are a useful special case, not the default.
+Symbolic dimensions like `"B"`, `"T"`, `"D"` are the primary mechanism. They
+exist because real tensor shapes live in two places a static analyzer cannot
+see:
+
+- **Config-driven sizes.** Batch size, sequence length, model width — these
+  come from config objects (`cfg.d_model`, CLI flags, YAML) resolved at runtime,
+  not from literals in the source.
+- **Disk-loaded data.** The shapes of tensors produced by `torch.load(...)`,
+  `Dataset.__getitem__`, or any HDF5/Parquet/pickle reader are determined by
+  the contents of files on disk. No amount of source-code reading can recover
+  them.
+
+Chasing either would require executing the user's code, which is explicitly out
+of scope. Instead, symbolic dims flow through operations, and the analyzer
+verifies that every operation is consistent with the declared shapes. Concrete
+integer dimensions (e.g. `3` for RGB channels, `768` for a known embedding
+size) are a useful special case, not the default.
 
 Start by annotating `forward` (or your main entry point), run `tsf check`, and
 follow the diagnostics outward. See [Quickstart — Workflow](quickstart.md#workflow)

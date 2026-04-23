@@ -46,6 +46,10 @@ TorchShapeFlow is shape-only by design. `DType`, `Device`, `Layout`, and distrib
 
 - Executing user code to infer shapes
 - Runtime instrumentation or tracing
+- Inferring shapes that only exist at runtime — config-driven sizes and
+  disk-loaded data. See
+  [Annotation Syntax — Why annotate?](syntax.md#why-annotate) for the rationale
+  (this is the reason symbolic dims are the primary mechanism).
 - TorchScript, `torch.compile`, or `torch.fx` integration
 - Full language-server functionality
 - Auto-fixing user code
