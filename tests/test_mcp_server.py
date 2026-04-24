@@ -126,3 +126,21 @@ def test_build_server_wires_three_tools() -> None:
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
     assert names == {"check", "suggest", "hover_at"}
+
+
+def test_check_tool_graceful_on_missing_path(tmp_path: Path) -> None:
+    """Agents pass bad paths; crashing the server would kill the session."""
+    missing = tmp_path / "does-not-exist.py"
+    payload = mcp_server._tool_check(str(missing))
+    assert payload == {"files": []}
+
+
+def test_suggest_tool_graceful_on_missing_path(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist.py"
+    payload = mcp_server._tool_suggest(str(missing))
+    assert payload == {"files": []}
+
+
+def test_hover_at_tool_graceful_on_missing_path(tmp_path: Path) -> None:
+    missing = tmp_path / "does-not-exist.py"
+    assert mcp_server._tool_hover_at(str(missing), 1, 1) is None

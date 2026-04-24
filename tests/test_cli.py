@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -165,3 +166,101 @@ def test_cli_check_json_does_not_include_suggestions(tmp_path: Path) -> None:
     assert exit_code == 0
     payload = json.loads(stdout)
     assert "suggestions" not in payload["files"][0]
+
+
+def _run_cli_with_stdin(stdin_payload: str, *args: str) -> tuple[int, str, str]:
+    """Invoke ``tsf`` with a custom stdin payload. Returns (exit, stdout, stderr)."""
+    from contextlib import redirect_stderr
+
+    from torchshapeflow.cli import main
+
+    original_stdin = sys.stdin
+    stdout = StringIO()
+    stderr = StringIO()
+    try:
+        sys.stdin = StringIO(stdin_payload)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main(args)
+    finally:
+        sys.stdin = original_stdin
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def test_hook_post_edit_silent_on_clean_file(tmp_path: Path) -> None:
+    """No error diagnostics → hook stays quiet and exits 0."""
+    source = (
+        "from typing import Annotated\n"
+        "import torch\n"
+        "from torchshapeflow import Shape\n"
+        "\n"
+        "def fn(x: Annotated[torch.Tensor, Shape('B',)]):\n"
+        "    return x\n"
+    )
+    target = tmp_path / "clean.py"
+    target.write_text(source, encoding="utf-8")
+    payload = json.dumps({"tool_input": {"file_path": str(target)}})
+    exit_code, stdout, stderr = _run_cli_with_stdin(payload, "_hook_post_edit")
+    assert exit_code == 0
+    assert stdout == ""
+    assert stderr == ""
+
+
+def test_hook_post_edit_emits_diagnostics_on_shape_error(tmp_path: Path) -> None:
+    """Error-severity diagnostics → hook prints the JSON report to stderr, exit 0."""
+    source = (
+        "from typing import Annotated\n"
+        "import torch\n"
+        "import torch.nn as nn\n"
+        "from torchshapeflow import Shape\n"
+        "\n"
+        "class M(nn.Module):\n"
+        "    def __init__(self) -> None:\n"
+        "        super().__init__()\n"
+        "        self.fc = nn.Linear(768, 256)\n"
+        "\n"
+        "    def forward(self, x: Annotated[torch.Tensor, Shape('B', 'T', 512)]):\n"
+        "        return self.fc(x)\n"
+    )
+    target = tmp_path / "broken.py"
+    target.write_text(source, encoding="utf-8")
+    payload = json.dumps({"tool_input": {"file_path": str(target)}})
+    exit_code, stdout, stderr = _run_cli_with_stdin(payload, "_hook_post_edit")
+    # Hook never blocks the session — exit is always 0.
+    assert exit_code == 0
+    # Report goes to stderr so it doesn't muddle the hook's stdout channel.
+    assert stdout == ""
+    assert stderr, "expected the hook to surface the diagnostic report on stderr"
+    report = json.loads(stderr)
+    assert any(
+        diag["code"] == "TSF1007"
+        for file_payload in report["files"]
+        for diag in file_payload["diagnostics"]
+    )
+
+
+def test_hook_post_edit_ignores_non_python_file(tmp_path: Path) -> None:
+    """Defence in depth: the hook won't act on a non-.py path even if invoked."""
+    target = tmp_path / "notes.md"
+    target.write_text("# not python\n", encoding="utf-8")
+    payload = json.dumps({"tool_input": {"file_path": str(target)}})
+    exit_code, stdout, stderr = _run_cli_with_stdin(payload, "_hook_post_edit")
+    assert exit_code == 0
+    assert stdout == ""
+    assert stderr == ""
+
+
+def test_hook_post_edit_ignores_missing_file(tmp_path: Path) -> None:
+    """A payload pointing at a missing file is a no-op, not a crash."""
+    payload = json.dumps({"tool_input": {"file_path": str(tmp_path / "gone.py")}})
+    exit_code, stdout, stderr = _run_cli_with_stdin(payload, "_hook_post_edit")
+    assert exit_code == 0
+    assert stdout == ""
+    assert stderr == ""
+
+
+def test_hook_post_edit_handles_malformed_payload() -> None:
+    """Bad JSON on stdin is silently ignored; hook returns 0."""
+    exit_code, stdout, stderr = _run_cli_with_stdin("not json at all", "_hook_post_edit")
+    assert exit_code == 0
+    assert stdout == ""
+    assert stderr == ""

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from torchshapeflow._version import __version__
 from torchshapeflow.analyzer import analyze_path
 from torchshapeflow.index import ProjectIndex
 from torchshapeflow.report import FileReport
 from torchshapeflow.utils.paths import collect_python_files
+
+_PY_FILE = re.compile(r"\.py$")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the installed TorchShapeFlow version.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+
+    # Internal subcommand used by the Claude Code plugin's PostToolUse hook.
+    # Hidden from --help via SUPPRESS because it isn't a user-facing command.
+    subparsers.add_parser("_hook_post_edit", help=argparse.SUPPRESS)
     return parser
 
 
@@ -80,6 +88,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_suggest(path=namespace.path)
     if command == "mcp":
         return _run_mcp()
+    if command == "_hook_post_edit":
+        return _run_hook_post_edit()
     if command == "version":
         print(__version__)
         return 0
@@ -156,6 +166,72 @@ def _run_mcp() -> int:
 
     run_mcp_server()
     return 0
+
+
+def _run_hook_post_edit() -> int:
+    """Drive the Claude Code plugin's PostToolUse hook.
+
+    Reads the Claude Code hook payload from stdin, extracts the edited file
+    path, runs the analyzer on it, and prints the ``tsf check --json`` report
+    to stderr **only when** an error-severity diagnostic is present. Always
+    exits 0 so the hook never blocks the session on tooling hiccups (missing
+    file, malformed payload, transient issues).
+
+    The logic lives inside the CLI — rather than a standalone script invoked
+    via ``python3`` — so the plugin's ``hooks/hooks.json`` can call
+    ``uvx --from torchshapeflow[mcp] tsf _hook_post_edit``. One invocation,
+    no separate Python interpreter on PATH, no shell expansion of
+    ``${CLAUDE_PLUGIN_ROOT}``. Cross-platform everywhere ``uvx`` runs.
+    """
+    payload = _read_hook_payload()
+    file_path = _extract_py_file_path(payload)
+    if file_path is None:
+        return 0
+    target = Path(file_path)
+    if not target.exists():
+        return 0
+    project_index = ProjectIndex()
+    reports = [analyze_path(p, project_index) for p in collect_python_files(target)]
+    if not any(_has_error(report) for report in reports):
+        return 0
+    report_payload = {"files": [report.to_dict() for report in reports]}
+    # stderr so the diagnostic text flows through Claude Code's hook-output
+    # channel without getting muddled with the hook's stdout contract.
+    print(json.dumps(report_payload, indent=2), file=sys.stderr)
+    return 0
+
+
+def _read_hook_payload() -> dict[str, Any]:
+    """Parse the Claude Code hook payload off stdin.
+
+    Returns an empty dict on any malformed input so the hook degrades silently
+    rather than spamming stderr during transient encoding issues.
+    """
+    try:
+        data = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_py_file_path(payload: dict[str, Any]) -> str | None:
+    """Extract ``tool_input.file_path`` from the hook payload iff it's a ``.py``.
+
+    Claude Code's ``hooks.json`` ``if`` gate already filters on ``.py$``; this
+    is a defence-in-depth check so the hook can't accidentally run on a
+    non-Python file even if the gate is missed or changes shape.
+    """
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    candidate = tool_input.get("file_path")
+    if isinstance(candidate, str) and _PY_FILE.search(candidate):
+        return candidate
+    return None
+
+
+def _has_error(report: FileReport) -> bool:
+    return any(diag.severity == "error" for diag in report.diagnostics)
 
 
 def _exit_code(reports: Sequence[FileReport]) -> int:

@@ -43,16 +43,12 @@ etc.), configure the MCP server directly. Minimal `.mcp.json` entry:
 }
 ```
 
-The three tools are the same as the plugin:
-
-| Tool | Signature | Returns |
-|---|---|---|
-| `check` | `check(path: str)` | `{files: [{path, diagnostics, hovers}]}` — same payload as `tsf check --json` |
-| `suggest` | `suggest(path: str)` | `{files: [{path, diagnostics, suggestions}]}` — same payload as `tsf suggest` |
-| `hover_at` | `hover_at(path: str, line: int, column: int)` | Hover fact at the 1-based location, or `null` |
-
-See [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema)
-for the field-level schema shared by both the CLI and the MCP server.
+The three tools — `check`, `suggest`, `hover_at` — are the same as those
+surfaced by the plugin. See
+[skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+for signatures and usage semantics (single source of truth). The
+underlying JSON payloads are documented in
+[Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema).
 
 ## CLI-only usage (no MCP)
 

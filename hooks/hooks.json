@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post_edit.py"
+            "command": "uvx --from torchshapeflow[mcp] tsf _hook_post_edit"
           }
         ]
       }
