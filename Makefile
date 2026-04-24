@@ -18,7 +18,7 @@ help:
 		'  make bump-patch | bump-minor | bump-major'
 
 install:
-	uv sync --extra dev
+	uv sync --extra dev --extra mcp
 
 format:
 	uv run ruff format .
