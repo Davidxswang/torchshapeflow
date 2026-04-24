@@ -952,6 +952,12 @@ def _analyze_function(
     context: ModuleContext,
     module_specs: dict[str, ModuleSpec],
 ) -> None:
+    # Snapshot error-severity diagnostic count *before* annotation parsing so
+    # TSF1001 errors on malformed param annotations are counted against this
+    # function alongside body errors. If the snapshot happened after
+    # _collect_function_annotations, a bad annotation on one param would slip
+    # past the suggest guard when a sibling param's return path was clean.
+    errors_before = sum(1 for d in context.diagnostics if d.severity == "error")
     env, local_aliases, tensor_params, return_shape = _collect_function_annotations(
         function, context
     )
@@ -963,9 +969,6 @@ def _analyze_function(
     old_collected_returns = context.collected_returns
     context.collected_returns = []
     context.return_shape = return_shape
-    # Snapshot error-severity diagnostic count so the suggest helper can tell
-    # whether analyzing this function surfaced any errors.
-    errors_before = sum(1 for d in context.diagnostics if d.severity == "error")
     for statement in function.body:
         _analyze_statement(statement, env, context, module_specs, local_aliases)
     # Emit a signature hover on the function name if any tensor params are present.

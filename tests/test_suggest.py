@@ -489,6 +489,39 @@ class M(nn.Module):
     assert [s for s in report.suggestions if s.function == "forward"] == []
 
 
+def test_no_suggestion_when_annotation_parse_error_on_sibling_param() -> None:
+    """A TSF1001 on one param must silence the suggestion for the whole function.
+
+    Annotation parsing runs *before* the body walk. Without hoisting the
+    error baseline, a bad annotation on one param (TSF1001) would slip past
+    the error guard when a sibling tensor param let `return x` infer
+    cleanly — the function would receive a suggestion TSF had already
+    flagged as partially broken.
+    """
+    source = """
+from typing import Annotated
+import torch
+from torchshapeflow import Shape
+
+
+class _BadMeta:
+    pass
+
+
+def fn(
+    x: Annotated[torch.Tensor, Shape("B", "T", 512)],
+    y: Annotated[torch.Tensor, _BadMeta()],
+):
+    return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    # Precondition: annotation-parse error did fire.
+    assert any(d.code == "TSF1001" and d.severity == "error" for d in report.diagnostics)
+    # The function must stay silent — TSF flagged it, so TSF must not also
+    # endorse a return contract for it.
+    assert [s for s in report.suggestions if s.function == "fn"] == []
+
+
 def test_suggestion_emitted_for_sibling_clean_function() -> None:
     """A broken function silences its own suggestion without affecting others."""
     source = """
