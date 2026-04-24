@@ -51,6 +51,12 @@ like channels, head counts, or embedding widths.
 - [Annotation syntax](syntax.md) — how to annotate your tensors
 - [Supported operators](operators.md) — what is analyzed and what shapes are inferred
 
+## For AI coding agents
+
+- [Agent guide](agents.md) — how Claude Code, Cursor, Copilot, and other
+  tool-using LLMs should invoke `tsf check` / `tsf suggest` and interpret
+  the output
+
 ## For contributors
 
 - [Architecture](architecture.md) — module map, analysis pipeline, Dim type system

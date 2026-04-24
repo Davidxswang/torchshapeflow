@@ -56,6 +56,7 @@ Full docs at **[davidxswang.github.io/torchshapeflow](https://davidxswang.github
 - [Annotation syntax](https://davidxswang.github.io/torchshapeflow/syntax/) — how to annotate your tensors
 - [Supported operators](https://davidxswang.github.io/torchshapeflow/operators/) — what is analyzed and what shapes are inferred
 - [Limitations](https://davidxswang.github.io/torchshapeflow/limitations/) — what the analyzer does not handle
+- [For AI coding agents](https://davidxswang.github.io/torchshapeflow/agents/) — how Claude Code / Cursor / Copilot / Aider should invoke the CLI and interpret output
 
 ## Contributing
 
