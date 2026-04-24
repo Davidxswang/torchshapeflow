@@ -1,0 +1,7 @@
+{
+  "name": "torchshapeflow",
+  "description": "Static PyTorch tensor shape analysis. Exposes check / suggest / hover_at MCP tools, a shape-annotation skill for agents, and a post-edit hook that surfaces shape diagnostics automatically.",
+  "version": "0.6.0",
+  "homepage": "https://davidxswang.github.io/torchshapeflow",
+  "repository": "https://github.com/Davidxswang/torchshapeflow"
+}

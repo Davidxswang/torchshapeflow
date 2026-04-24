@@ -1,168 +1,69 @@
 # For AI Coding Agents
 
-This page is for AI coding agents (Claude Code, Cursor, Copilot, Aider, or any
-tool-using LLM) that edit PyTorch code. If you are a human looking for a
-tutorial, read the [Quickstart](quickstart.md) instead.
+This page is about TorchShapeFlow's integration with AI coding agents — Claude
+Code, Cursor, Aider, Copilot, and any tool-using LLM that edits PyTorch code.
+If you are a human looking for a tutorial, read the [Quickstart](quickstart.md).
 
-## What TorchShapeFlow does
+## One-line install (Claude Code)
 
-TSF is a static AST-based shape analyzer. It reads annotations of the form
-`Annotated[torch.Tensor, Shape(...)]` on function parameters and verifies that
-the operations in the body are consistent with those shapes. No code is
-executed; no config objects are resolved; no on-disk tensor data is inspected.
-This is by design — see [Annotation Syntax — Why annotate?](syntax.md#why-annotate).
-
-If you want a shape bug caught, the user (or you) must declare the shape
-contract on the function boundary. The analyzer then propagates symbolic
-dimensions through supported operators and reports mismatches.
-
-## When to reach for TSF
-
-- You are writing or modifying a PyTorch `nn.Module.forward` method, a model
-  component, or any function that operates on tensors.
-- You are about to paste code that does `@`, `matmul`, `reshape`, `view`,
-  `permute`, or passes tensors through `nn.Linear` / `nn.Conv2d` / `nn.LSTM` —
-  these are the failure modes TSF is best at catching.
-- The user asks for a shape-correctness check, or for the return type of a
-  function they have partially annotated.
-
-If the code has no `Annotated[..., Shape(...)]` annotations anywhere, TSF will
-be silent. That is not a bug — it is the design. In that case, add a minimal
-annotation first (see [Minimal annotation recipe](#minimal-annotation-recipe)).
-
-## Two commands
-
-### `tsf check --json <path>`
-
-Runs the analyzer and emits diagnostics + hover facts.
-
-- **Exit 0** means every analyzed file is clean (no `error`-severity
-  diagnostics).
-- **Exit 1** means at least one file produced an error-severity diagnostic.
-  Warnings alone do not flip the exit code.
-- The JSON payload is `{ "files": [ { path, diagnostics, hovers } ] }`.
-
-Shape-mismatch diagnostics (TSF1003, TSF1007, etc.) carry structured
-`expected` / `actual` / `hint` fields alongside the prose `message`. Prefer
-the structured fields when deciding how to fix the code; the prose is for
-surfacing to a human. See [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema).
-
-### `tsf suggest <path>`
-
-Proposes annotations the analyzer has already verified — today, only return
-annotations for functions whose parameters are annotated and whose every exit
-path returns a shape-stable tensor.
-
-- **Exit 0** means analysis succeeded (regardless of whether suggestions were
-  produced).
-- **Exit 1** means at least one file emitted an error-severity diagnostic.
-  This matters: an empty `suggestions` list alongside a clean exit means "TSF
-  verified the function and has nothing to add." An empty `suggestions` list
-  alongside a non-zero exit means "TSF could not verify some function — read
-  the `diagnostics` to see why." Do not conflate the two.
-- Payload is `{ "files": [ { path, diagnostics, suggestions } ] }`.
-- The command is read-only. It never rewrites source files. If you act on a
-  suggestion, you do the edit; TSF only recommends.
-
-Each suggestion includes a pasteable `annotation` string and a raw `shape`.
-The annotation is rendered by reusing the first annotated parameter's AST as
-a template, so names like `Annotated`, `Tensor`, `torch.Tensor`, and
-`typing.Annotated` always match what the target file already imports. Paste
-the `annotation` verbatim.
-
-## Decision tree
-
-```
-User edited PyTorch code?
-├── yes → run tsf check --json
-│         ├── exit 1 → surface diagnostics to user; for each TSF1xxx error,
-│         │           the `expected`, `actual`, and `hint` fields tell you
-│         │           exactly what to change
-│         └── exit 0 → (optional) run tsf suggest to see whether TSF can
-│                     fill in return annotations you have not written yet
-└── no  → no action needed
+```text
+/plugin marketplace add Davidxswang/torchshapeflow
+/plugin install torchshapeflow
 ```
 
-## Minimal annotation recipe
+That registers a Claude Code plugin which ships three things:
 
-If the user's code has no annotations, the smallest first step is:
+- An **MCP server** with tools `check`, `suggest`, and `hover_at`, launched on
+  demand via `uvx` from stdio — no global install, no config-file editing.
+- A **skill** that teaches the agent when to reach for TSF, how to interpret
+  structured diagnostics, and how to propose annotations. This is the
+  canonical agent workflow; see
+  [skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+  for the exact text the agent reads.
+- A **post-edit hook** that auto-runs `tsf check` after `Write` / `Edit`
+  operations on `.py` files and surfaces shape errors to the session.
 
-```python
-from typing import Annotated
-import torch
-from torchshapeflow import Shape
+After install, the agent knows how to use TSF without any further prompting.
+The skill description handles when-to-invoke; the hook handles after-edit
+sweep; the MCP tools handle on-demand queries.
 
+## Using the MCP server without the plugin
 
-def forward(
-    self,
-    x: Annotated[torch.Tensor, Shape("B", "T", 768)],
-):
-    ...
-```
-
-Symbolic names (`"B"`, `"T"`) are the default. Use integer constants only for
-axes that are semantically fixed (`3` for RGB, `768` for a known embedding
-width). Dimensions that come from config objects or from disk-loaded data
-should stay symbolic — the analyzer cannot see their values.
-
-For larger projects, centralize shape aliases in a `shapes.py` module. See
-[Annotation Syntax — Type alias pattern](syntax.md#type-alias-pattern).
-
-## Failure modes to recognize
-
-| Symptom | Likely cause | What to do |
-|---|---|---|
-| `tsf check` emits no diagnostics and no hovers | No `Shape` annotations in the file | Add one annotation to a function parameter and re-run |
-| `TSF2001` / `TSF2002` / `TSF2003` warnings | Inference lost at a specific operator or call site | Either the operator is unsupported (fine to ignore) or you can annotate the called helper to restore tracking |
-| `tsf suggest` returns empty `suggestions` with exit 0 | TSF analyzed the function cleanly but one of the preconditions did not hold (e.g. multiple return paths with different shapes, a generator, an ExpressionDim in the inferred shape) | No action required — the feature is intentionally narrow |
-| `tsf suggest` returns empty `suggestions` with exit 1 | An error-severity diagnostic fired; the function is not endorsed | Read `diagnostics`, fix the reported error, then re-run |
-
-## Running as an MCP server
-
-For tool-using agents that speak the Model Context Protocol (Claude Code,
-Cursor, Aider, and others), TSF ships a first-class MCP server. Install the
-optional extra:
-
-```bash
-pip install "torchshapeflow[mcp]"
-```
-
-Then configure your agent runtime to launch the server with `tsf mcp`. The
-server speaks the standard MCP stdio transport — no ports, no auth tokens.
-A minimal `.mcp.json` entry looks like:
+If you're on a runtime that doesn't use Claude Code plugins (Cursor, Aider,
+etc.), configure the MCP server directly. Minimal `.mcp.json` entry:
 
 ```json
 {
   "mcpServers": {
     "torchshapeflow": {
-      "command": "tsf",
-      "args": ["mcp"]
+      "command": "uvx",
+      "args": ["--from", "torchshapeflow[mcp]", "tsf", "mcp"]
     }
   }
 }
 ```
 
-The server exposes three tools, each a thin wrapper over the analyzer that
-powers `tsf check` / `tsf suggest`:
+The three tools are the same as the plugin:
 
-| Tool | Signature | What it returns |
+| Tool | Signature | Returns |
 |---|---|---|
 | `check` | `check(path: str)` | `{files: [{path, diagnostics, hovers}]}` — same payload as `tsf check --json` |
 | `suggest` | `suggest(path: str)` | `{files: [{path, diagnostics, suggestions}]}` — same payload as `tsf suggest` |
-| `hover_at` | `hover_at(path: str, line: int, column: int)` | The `HoverFact` dict bracketing that 1-based location, or `null` if none applies |
+| `hover_at` | `hover_at(path: str, line: int, column: int)` | Hover fact at the 1-based location, or `null` |
 
-The semantics are identical to the CLI. If you already know how to read
-`tsf check --json` output (see [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema)),
-you already know how to read the `check` tool's result.
+See [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema)
+for the field-level schema shared by both the CLI and the MCP server.
 
-## What TSF will not do
+## CLI-only usage (no MCP)
 
-- Execute user code to infer shapes.
-- Resolve config objects like `cfg.d_model` or YAML entries.
-- Infer shapes of tensors loaded from disk (`torch.load`, dataset `__getitem__`,
-  HDF5 / Parquet / pickle).
-- Rewrite source files.
-- Check dtype, device, layout, or distributed-tensor semantics — it is
-  shape-only by design.
+Agents that want to shell out directly instead of going through MCP can invoke
+the same commands:
 
-See [Limitations](limitations.md) for the complete non-goals list.
+```bash
+tsf check --json path/to/file.py     # exit 1 on shape errors
+tsf suggest path/to/file.py          # exit 1 iff analysis surfaced errors
+```
+
+Both produce the same JSON you would see via MCP. The agent workflow in
+[the skill](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+applies identically.
