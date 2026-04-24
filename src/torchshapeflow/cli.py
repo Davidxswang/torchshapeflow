@@ -48,6 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     suggest_parser.add_argument("path", type=Path, help="File or directory to analyze.")
 
     subparsers.add_parser(
+        "mcp",
+        help="Start an MCP server exposing TSF analysis to AI agents (requires the `mcp` extra).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    subparsers.add_parser(
         "version",
         help="Print the installed TorchShapeFlow version.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -72,6 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if command == "suggest":
         return _run_suggest(path=namespace.path)
+    if command == "mcp":
+        return _run_mcp()
     if command == "version":
         print(__version__)
         return 0
@@ -136,6 +144,18 @@ def _run_suggest(path: Path) -> int:
     }
     print(json.dumps(payload, indent=2))
     return _exit_code(reports)
+
+
+def _run_mcp() -> int:
+    """Start the MCP server on stdio.
+
+    Lazy-imports ``mcp_server`` so callers that never invoke ``tsf mcp``
+    don't need the optional ``mcp`` extra installed.
+    """
+    from torchshapeflow.mcp_server import run as run_mcp_server
+
+    run_mcp_server()
+    return 0
 
 
 def _exit_code(reports: Sequence[FileReport]) -> int:

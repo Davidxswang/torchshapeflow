@@ -117,6 +117,44 @@ For larger projects, centralize shape aliases in a `shapes.py` module. See
 | `tsf suggest` returns empty `suggestions` with exit 0 | TSF analyzed the function cleanly but one of the preconditions did not hold (e.g. multiple return paths with different shapes, a generator, an ExpressionDim in the inferred shape) | No action required — the feature is intentionally narrow |
 | `tsf suggest` returns empty `suggestions` with exit 1 | An error-severity diagnostic fired; the function is not endorsed | Read `diagnostics`, fix the reported error, then re-run |
 
+## Running as an MCP server
+
+For tool-using agents that speak the Model Context Protocol (Claude Code,
+Cursor, Aider, and others), TSF ships a first-class MCP server. Install the
+optional extra:
+
+```bash
+pip install "torchshapeflow[mcp]"
+```
+
+Then configure your agent runtime to launch the server with `tsf mcp`. The
+server speaks the standard MCP stdio transport — no ports, no auth tokens.
+A minimal `.mcp.json` entry looks like:
+
+```json
+{
+  "mcpServers": {
+    "torchshapeflow": {
+      "command": "tsf",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The server exposes three tools, each a thin wrapper over the analyzer that
+powers `tsf check` / `tsf suggest`:
+
+| Tool | Signature | What it returns |
+|---|---|---|
+| `check` | `check(path: str)` | `{files: [{path, diagnostics, hovers}]}` — same payload as `tsf check --json` |
+| `suggest` | `suggest(path: str)` | `{files: [{path, diagnostics, suggestions}]}` — same payload as `tsf suggest` |
+| `hover_at` | `hover_at(path: str, line: int, column: int)` | The `HoverFact` dict bracketing that 1-based location, or `null` if none applies |
+
+The semantics are identical to the CLI. If you already know how to read
+`tsf check --json` output (see [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema)),
+you already know how to read the `check` tool's result.
+
 ## What TSF will not do
 
 - Execute user code to infer shapes.
