@@ -64,8 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Internal subcommand used by the Claude Code plugin's PostToolUse hook.
-    # Hidden from --help via SUPPRESS because it isn't a user-facing command.
-    subparsers.add_parser("_hook_post_edit", help=argparse.SUPPRESS)
+    # ``help=argparse.SUPPRESS`` would be nicer but does not reliably hide
+    # subparser entries across Python versions (3.10–3.12 render the literal
+    # sentinel "==SUPPRESS==" instead of the documented hide behavior). A
+    # plain descriptive help string is cross-version stable and makes the
+    # underscore-prefixed name read correctly in ``tsf --help``.
+    subparsers.add_parser(
+        "_hook_post_edit",
+        help="Claude Code plugin PostToolUse hook (internal; not for direct invocation).",
+    )
     return parser
 
 
