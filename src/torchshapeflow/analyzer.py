@@ -963,6 +963,9 @@ def _analyze_function(
     old_collected_returns = context.collected_returns
     context.collected_returns = []
     context.return_shape = return_shape
+    # Snapshot error-severity diagnostic count so the suggest helper can tell
+    # whether analyzing this function surfaced any errors.
+    errors_before = sum(1 for d in context.diagnostics if d.severity == "error")
     for statement in function.body:
         _analyze_statement(statement, env, context, module_specs, local_aliases)
     # Emit a signature hover on the function name if any tensor params are present.
@@ -971,7 +974,12 @@ def _analyze_function(
             function, tensor_params, context.return_shape, context.collected_returns, context
         )
     _maybe_suggest_return_annotation(
-        function, tensor_params, context.return_shape, context.collected_returns, context
+        function,
+        tensor_params,
+        context.return_shape,
+        context.collected_returns,
+        context,
+        errors_before=errors_before,
     )
     context.collected_returns = old_collected_returns
     context.return_shape = old_return_shape
@@ -1122,6 +1130,8 @@ def _maybe_suggest_return_annotation(
     declared_return: TensorValue | None,
     collected_returns: list[TensorValue | None],
     context: ModuleContext,
+    *,
+    errors_before: int,
 ) -> None:
     """Propose a return annotation when the analyzer can verify the shape.
 
@@ -1129,6 +1139,8 @@ def _maybe_suggest_return_annotation(
 
     - At least one parameter has a ``Shape`` annotation (user opted in).
     - The function has no return annotation at all (``function.returns`` is None).
+    - Analyzing the function body added no new error-severity diagnostics —
+      TSF must not propose a contract on code it has also flagged as broken.
     - ``_body_terminates_with_return`` proves every exit path returns a value
       (guards against implicit fallthrough → None and bare ``return``).
     - Every collected return expression produced a ``TensorValue`` with the
@@ -1154,6 +1166,9 @@ def _maybe_suggest_return_annotation(
         return
     unique_shapes = {str(r.shape) for r in collected_returns if r is not None}
     if len(unique_shapes) != 1:
+        return
+    errors_after = sum(1 for d in context.diagnostics if d.severity == "error")
+    if errors_after > errors_before:
         return
     if _contains_top_level_yield(function.body):
         return

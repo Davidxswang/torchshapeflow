@@ -457,6 +457,65 @@ def fn(x: Annotated[torch.Tensor, Shape("B",)]):
     assert outer_suggestions[0].annotation == "Annotated[torch.Tensor, Shape('B')]"
 
 
+def test_no_suggestion_when_function_has_error_diagnostics() -> None:
+    """A function that triggers any TSF error must not receive a suggestion.
+
+    Even when one return path is shape-stable, the function has been
+    diagnosed as broken; proposing a return annotation on it violates the
+    "suggest only what the analyzer has verified" contract and misleads
+    agents into treating the broken function as endorsed.
+    """
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+
+class M(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.Linear(768, 256)
+
+    def forward(self, x: Annotated[torch.Tensor, Shape("B", "T", 512)]):
+        _ = self.fc(x)  # TSF1007: in_features=768 vs last dim 512
+        return x
+"""
+    report = analyze_source(source, Path("m.py"))
+    # Precondition: the fixture actually does emit an error.
+    assert any(d.code == "TSF1007" and d.severity == "error" for d in report.diagnostics)
+    # Even though `return x` has a stable tensor shape, TSF must stay silent
+    # on the broken function.
+    assert [s for s in report.suggestions if s.function == "forward"] == []
+
+
+def test_suggestion_emitted_for_sibling_clean_function() -> None:
+    """A broken function silences its own suggestion without affecting others."""
+    source = """
+from typing import Annotated
+import torch
+import torch.nn as nn
+from torchshapeflow import Shape
+
+
+class M(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.Linear(768, 256)
+
+    def broken(self, x: Annotated[torch.Tensor, Shape("B", "T", 512)]):
+        _ = self.fc(x)  # TSF1007
+        return x
+
+    def clean(self, x: Annotated[torch.Tensor, Shape("B", "T", 768)]):
+        return self.fc(x)
+"""
+    report = analyze_source(source, Path("m.py"))
+    functions_with_suggestions = {s.function for s in report.suggestions}
+    assert "broken" not in functions_with_suggestions
+    assert "clean" in functions_with_suggestions
+
+
 def test_suggestion_allows_generator_expression_in_body() -> None:
     """A generator expression `(x for x in ...)` does not use ast.Yield — it's
     a GeneratorExp literal. Functions using one are not generator functions."""

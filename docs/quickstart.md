@@ -171,6 +171,8 @@ Suggestions are emitted only when every precondition holds:
 
 - At least one parameter has a `Shape` annotation (you opted in).
 - The function has no return annotation yet.
+- The function body emitted no error-severity diagnostics during analysis —
+  TSF will not propose a contract on code it has already flagged as broken.
 - Every exit path provably returns a value. Recognized terminators are a
   trailing `return X`, a trailing `raise`, and `if/else` where every
   branch terminates. Loops, `try/except`, `match`, and bare `return` are
