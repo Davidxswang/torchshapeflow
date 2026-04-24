@@ -162,7 +162,12 @@ def my_func(x: Annotated[torch.Tensor, Shape("B",)]):
 
 
 def test_suggestion_serializes_to_dict() -> None:
-    """Suggestion.to_dict and FileReport.to_dict include the suggestion fields."""
+    """Suggestion.to_dict round-trips; FileReport.to_dict intentionally omits it.
+
+    Suggestions are not part of the generic report payload (``tsf check --json``,
+    library callers) — they are rendered by ``tsf suggest`` directly. Callers
+    that need proposal data read ``report.suggestions`` on the dataclass.
+    """
     source = """
 from typing import Annotated
 import torch
@@ -178,9 +183,12 @@ def fn(x: Annotated[torch.Tensor, Shape("B",)]):
     assert sug_payload["kind"] == "return_annotation"
     assert sug_payload["function"] == "fn"
     assert sug_payload["annotation"] == "Annotated[torch.Tensor, Shape('B')]"
+    # FileReport.to_dict stays narrow: no suggestions field leaks into the
+    # shared report JSON.
     report_payload = report.to_dict()
-    assert "suggestions" in report_payload
-    assert report_payload["suggestions"] == [sug_payload]
+    assert "suggestions" not in report_payload
+    assert "diagnostics" in report_payload
+    assert "hovers" in report_payload
 
 
 # ---------------------------------------------------------------------------

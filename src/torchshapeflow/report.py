@@ -67,6 +67,11 @@ class FileReport:
     path: str
     diagnostics: list[Diagnostic] = field(default_factory=list)
     hovers: list[HoverFact] = field(default_factory=list)
+    # `suggestions` is populated by the analyzer but deliberately excluded from
+    # ``to_dict()``. The generic report JSON (emitted by ``tsf check --json``
+    # and consumed by the VS Code extension / library callers) is intentionally
+    # stable and has no need for proposal data. ``tsf suggest`` reads this
+    # attribute directly and renders its own payload.
     suggestions: list[Suggestion] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -74,5 +79,4 @@ class FileReport:
             "path": self.path,
             "diagnostics": [item.to_dict() for item in self.diagnostics],
             "hovers": [item.to_dict() for item in self.hovers],
-            "suggestions": [item.to_dict() for item in self.suggestions],
         }

@@ -145,12 +145,13 @@ already verify, without touching your source. Example output:
   "files": [
     {
       "path": "model.py",
+      "diagnostics": [],
       "suggestions": [
         {
           "line": 6, "column": 5,
           "function": "scores",
           "shape": "[B, H, T, T]",
-          "annotation": "Annotated[torch.Tensor, Shape(\"B\", \"H\", \"T\", \"T\")]",
+          "annotation": "Annotated[torch.Tensor, Shape('B', 'H', 'T', 'T')]",
           "kind": "return_annotation"
         }
       ]
@@ -159,9 +160,12 @@ already verify, without touching your source. Example output:
 }
 ```
 
-Review each suggestion and paste it into your function definition. TSF
-**never writes suggestions back** — it proposes; you (or your editor/agent)
-decide.
+Each file entry carries both `diagnostics` and `suggestions`, so callers can
+tell an empty-but-clean analysis (`diagnostics: []`, `suggestions: []`,
+exit `0`) apart from an analysis that surfaced shape errors (`diagnostics`
+populated, exit non-zero). Review each suggestion and paste it into your
+function definition. TSF **never writes suggestions back** — it proposes;
+you (or your editor/agent) decide.
 
 Suggestions are emitted only when every precondition holds:
 
