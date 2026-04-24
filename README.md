@@ -44,6 +44,20 @@ same for tensor-shape boundaries in deep learning code.
 
 ## Install
 
+**In Claude Code** (one-line, recommended):
+
+```text
+/plugin marketplace add Davidxswang/torchshapeflow
+/plugin install torchshapeflow
+```
+
+This installs a plugin that registers an MCP server, an agent skill, and a
+post-edit hook — your Claude Code then knows how to run `tsf check`, interpret
+the structured diagnostics, and propose annotations. No manual `.mcp.json`
+editing required.
+
+**As a plain Python package** (for CLI use or other agent runtimes):
+
 ```bash
 pip install torchshapeflow
 ```
