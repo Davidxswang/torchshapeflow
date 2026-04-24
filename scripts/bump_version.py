@@ -10,6 +10,7 @@ PYPROJECT_PATH = Path("pyproject.toml")
 PYTHON_VERSION_PATH = Path("src/torchshapeflow/_version.py")
 EXTENSION_PACKAGE_PATH = Path("extensions/vscode/package.json")
 EXTENSION_LOCK_PATH = Path("extensions/vscode/package-lock.json")
+CLAUDE_PLUGIN_PATH = Path(".claude-plugin/plugin.json")
 VERSION_PATTERN = re.compile(r'^version = "(?P<version>\d+\.\d+\.\d+)"$', re.MULTILINE)
 PYTHON_VERSION_PATTERN = re.compile(
     r'^__version__ = "(?P<version>\d+)\.(\d+)\.(\d+)"$',
@@ -49,6 +50,7 @@ def main() -> int:
     PYPROJECT_PATH.write_text(updated, encoding="utf-8")
     _update_python_version(version_text)
     _update_extension_version(version_text)
+    _update_plugin_version(version_text)
     print(replacement)
     return 0
 
@@ -66,6 +68,20 @@ def _update_extension_version(version_text: str) -> None:
         payload = json.loads(path.read_text(encoding="utf-8"))
         _set_version_fields(payload, version_text)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _update_plugin_version(version_text: str) -> None:
+    """Keep the Claude Code plugin manifest's ``version`` in lockstep.
+
+    The plugin manifest is a simple JSON file with ``version`` at the top
+    level — no nested packages block, so ``_set_version_fields``'s extra
+    walk over ``packages[""]`` is a no-op and safe to reuse.
+    """
+    if not CLAUDE_PLUGIN_PATH.exists():
+        return
+    payload = json.loads(CLAUDE_PLUGIN_PATH.read_text(encoding="utf-8"))
+    _set_version_fields(payload, version_text)
+    CLAUDE_PLUGIN_PATH.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def _set_version_fields(payload: dict[str, object], version_text: str) -> None:
