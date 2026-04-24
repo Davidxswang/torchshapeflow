@@ -40,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show per-file status for clean files.",
     )
 
+    suggest_parser = subparsers.add_parser(
+        "suggest",
+        help="Propose annotations TorchShapeFlow can already verify (JSON).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    suggest_parser.add_argument("path", type=Path, help="File or directory to analyze.")
+
     subparsers.add_parser(
         "version",
         help="Print the installed TorchShapeFlow version.",
@@ -63,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             json_output=namespace.json_output,
             verbose=namespace.verbose,
         )
+    if command == "suggest":
+        return _run_suggest(path=namespace.path)
     if command == "version":
         print(__version__)
         return 0
@@ -96,6 +105,36 @@ def _run_check(path: Path, json_output: bool, verbose: bool) -> int:
             )
     lines.append(_summary(reports))
     print("\n".join(lines))
+    return _exit_code(reports)
+
+
+def _run_suggest(path: Path) -> int:
+    """Emit JSON proposals for annotations TorchShapeFlow can already verify.
+
+    Suggestions are the analyzer's read-only proposals; TSF never writes them
+    back to source.
+
+    The payload includes ``diagnostics`` per file alongside ``suggestions`` so
+    that a caller can tell an empty-but-clean analysis apart from an analysis
+    that failed (e.g. a TSF1001 parse error on an unparseable annotation).
+    The exit code mirrors ``tsf check``: non-zero when any file emits an
+    ``error``-severity diagnostic. Without this, an agent calling
+    ``tsf suggest`` on a broken file would see identical ``suggestions: []``
+    and exit ``0`` as for a pristine file with nothing to add.
+    """
+    project_index = ProjectIndex()
+    reports = [analyze_path(file_path, project_index) for file_path in collect_python_files(path)]
+    payload = {
+        "files": [
+            {
+                "path": report.path,
+                "diagnostics": [item.to_dict() for item in report.diagnostics],
+                "suggestions": [item.to_dict() for item in report.suggestions],
+            }
+            for report in reports
+        ]
+    }
+    print(json.dumps(payload, indent=2))
     return _exit_code(reports)
 
 

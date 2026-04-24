@@ -128,6 +128,70 @@ TorchShapeFlow is opt-in: it only checks functions whose parameters carry
 Each step is incremental — you get value from the first annotation, and coverage
 grows as you add more.
 
+## Getting annotation proposals (`tsf suggest`)
+
+Once you have annotated parameters, the analyzer often already knows the
+return shape. Run:
+
+```bash
+tsf suggest path/to/mymodel.py
+```
+
+…and TorchShapeFlow emits JSON proposals for return annotations it can
+already verify, without touching your source. Example output:
+
+```json
+{
+  "files": [
+    {
+      "path": "model.py",
+      "diagnostics": [],
+      "suggestions": [
+        {
+          "line": 6, "column": 5,
+          "function": "scores",
+          "shape": "[B, H, T, T]",
+          "annotation": "Annotated[torch.Tensor, Shape('B', 'H', 'T', 'T')]",
+          "kind": "return_annotation"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each file entry carries both `diagnostics` and `suggestions`, so callers can
+tell an empty-but-clean analysis (`diagnostics: []`, `suggestions: []`,
+exit `0`) apart from an analysis that surfaced shape errors (`diagnostics`
+populated, exit non-zero). Review each suggestion and paste it into your
+function definition. TSF **never writes suggestions back** — it proposes;
+you (or your editor/agent) decide.
+
+Suggestions are emitted only when every precondition holds:
+
+- At least one parameter has a `Shape` annotation (you opted in).
+- The function has no return annotation yet.
+- The function body emitted no error-severity diagnostics during analysis —
+  TSF will not propose a contract on code it has already flagged as broken.
+- Every exit path provably returns a value. Recognized terminators are a
+  trailing `return X`, a trailing `raise`, and `if/else` where every
+  branch terminates. Loops, `try/except`, `match`, and bare `return` are
+  treated as "don't know" and silence the suggestion.
+- The function is not a generator. A `yield` or `yield from` in the body
+  makes the runtime return a `Generator[...]` object, not a tensor, so
+  suggesting a plain tensor return would be false. Nested `def`s with
+  their own `yield` are safe — only the outer body is checked.
+- Every `return` statement produces a tensor with the same shape.
+- Every dimension is expressible in `Shape(...)` syntax (symbolic names
+  and integer constants).
+- The first annotated parameter uses an inline `Annotated[..., Shape(...)]`
+  or `Annotated[..., "B T D"]` spelling — the suggestion reuses its form
+  so the proposed annotation refers only to names the file already
+  imports. `TypeAlias` params skip the suggestion.
+
+Anything outside this envelope is silently skipped — a function without a
+suggestion is not an error.
+
 ## Next steps
 
 - [Annotation syntax](syntax.md) — all supported annotation forms
