@@ -3,11 +3,6 @@
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
-        "if": {
-          "tool_input": {
-            "file_path": ".*\\.py$"
-          }
-        },
         "hooks": [
           {
             "type": "command",
