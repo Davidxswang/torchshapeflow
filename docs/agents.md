@@ -26,7 +26,7 @@ The plugin ships three things:
 - A **skill** that teaches the agent when to reach for TSF, how to interpret
   structured diagnostics, and how to propose annotations. This is the
   canonical agent workflow; see
-  [skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+  [skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/plugin/skills/torchshapeflow/SKILL.md)
   for the exact text the agent reads.
 - A **post-edit hook** that auto-runs `tsf check` after `Write` / `Edit`
   operations on `.py` files and surfaces shape errors to the session.
@@ -53,7 +53,7 @@ etc.), configure the MCP server directly. Minimal `.mcp.json` entry:
 
 The three tools — `check`, `suggest`, `hover_at` — are the same as those
 surfaced by the plugin. See
-[skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+[skills/torchshapeflow/SKILL.md](https://github.com/Davidxswang/torchshapeflow/blob/main/plugin/skills/torchshapeflow/SKILL.md)
 for signatures and usage semantics (single source of truth). The
 underlying JSON payloads are documented in
 [Architecture — Diagnostic JSON schema](architecture.md#diagnostic-json-schema).
@@ -69,5 +69,5 @@ tsf suggest path/to/file.py          # exit 1 iff analysis surfaced errors
 ```
 
 Both produce the same JSON you would see via MCP. The agent workflow in
-[the skill](https://github.com/Davidxswang/torchshapeflow/blob/main/skills/torchshapeflow/SKILL.md)
+[the skill](https://github.com/Davidxswang/torchshapeflow/blob/main/plugin/skills/torchshapeflow/SKILL.md)
 applies identically.

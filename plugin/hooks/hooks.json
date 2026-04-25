@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --from torchshapeflow[mcp] tsf _hook_post_edit"
+            "command": "uvx --from 'torchshapeflow[mcp]' tsf _hook_post_edit",
+            "timeout": 60
           }
         ]
       }
