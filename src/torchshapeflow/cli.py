@@ -196,7 +196,7 @@ def _run_hook_post_edit() -> int:
     - stderr is discarded unless the hook exits with code 2 ("block").
 
     The logic lives inside the CLI — rather than a standalone script invoked
-    via ``python3`` — so the plugin's ``hooks/hooks.json`` can call
+    via ``python3`` — so the plugin's ``plugin/hooks/hooks.json`` can call
     ``uvx --from torchshapeflow[mcp] tsf _hook_post_edit``. One invocation,
     no separate Python interpreter on PATH, no shell expansion of
     ``${CLAUDE_PLUGIN_ROOT}``. Cross-platform everywhere ``uvx`` runs.
