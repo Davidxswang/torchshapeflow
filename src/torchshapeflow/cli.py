@@ -175,14 +175,25 @@ def _run_mcp() -> int:
     return 0
 
 
+_ADDITIONAL_CONTEXT_LIMIT = 10_000
+
+
 def _run_hook_post_edit() -> int:
     """Drive the Claude Code plugin's PostToolUse hook.
 
     Reads the Claude Code hook payload from stdin, extracts the edited file
-    path, runs the analyzer on it, and prints the ``tsf check --json`` report
-    to stderr **only when** an error-severity diagnostic is present. Always
-    exits 0 so the hook never blocks the session on tooling hiccups (missing
-    file, malformed payload, transient issues).
+    path, runs the analyzer on it, and — only when at least one
+    error-severity diagnostic is present — emits the JSON envelope Claude
+    Code expects on **stdout** so the report reaches the agent's context.
+    Always exits 0 so the hook never blocks the session on tooling hiccups
+    (missing file, malformed payload, transient issues).
+
+    Claude Code's PostToolUse output contract (see
+    https://code.claude.com/docs/en/hooks for the authoritative docs):
+
+    - stdout is parsed as a JSON envelope; ``hookSpecificOutput.additionalContext``
+      is injected into the model's context (hard cap: 10,000 characters).
+    - stderr is discarded unless the hook exits with code 2 ("block").
 
     The logic lives inside the CLI — rather than a standalone script invoked
     via ``python3`` — so the plugin's ``hooks/hooks.json`` can call
@@ -202,9 +213,28 @@ def _run_hook_post_edit() -> int:
     if not any(_has_error(report) for report in reports):
         return 0
     report_payload = {"files": [report.to_dict() for report in reports]}
-    # stderr so the diagnostic text flows through Claude Code's hook-output
-    # channel without getting muddled with the hook's stdout contract.
-    print(json.dumps(report_payload, indent=2), file=sys.stderr)
+    additional_context = (
+        "TorchShapeFlow detected shape errors in the file you just edited. "
+        "Read the TSF1xxx codes below and apply the `hint` field — the "
+        "structured `expected` / `actual` / `hint` per-diagnostic fields tell "
+        "you exactly what to change.\n\n" + json.dumps(report_payload, indent=2)
+    )
+    # Cap at Claude Code's documented 10k-character limit so the envelope is
+    # delivered inline rather than spilled to a side file.
+    if len(additional_context) > _ADDITIONAL_CONTEXT_LIMIT:
+        truncated = additional_context[: _ADDITIONAL_CONTEXT_LIMIT - 120]
+        additional_context = (
+            truncated
+            + "\n\n… (diagnostics truncated at 10,000 characters; run `tsf check --json "
+            + f"{file_path}` for the full report)"
+        )
+    envelope = {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": additional_context,
+        }
+    }
+    print(json.dumps(envelope))
     return 0
 
 
