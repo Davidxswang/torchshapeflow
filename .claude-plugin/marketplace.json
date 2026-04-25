@@ -1,14 +1,18 @@
 {
   "name": "torchshapeflow",
-  "owner": "Xuesong Wang",
-  "description": "TorchShapeFlow — static PyTorch tensor shape analysis as a Claude Code plugin.",
+  "owner": {
+    "name": "Xuesong Wang",
+    "url": "https://github.com/Davidxswang"
+  },
+  "metadata": {
+    "description": "TorchShapeFlow — static PyTorch tensor shape analysis as a Claude Code plugin.",
+    "homepage": "https://davidxswang.github.io/torchshapeflow"
+  },
   "plugins": [
     {
       "name": "torchshapeflow",
-      "source": {
-        "source": "github",
-        "repo": "Davidxswang/torchshapeflow"
-      }
+      "source": ".",
+      "description": "Static PyTorch tensor shape analysis — MCP tools (check / suggest / hover_at), an agent skill, and a post-edit hook."
     }
   ]
 }
