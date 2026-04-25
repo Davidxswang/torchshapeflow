@@ -205,8 +205,12 @@ def test_hook_post_edit_silent_on_clean_file(tmp_path: Path) -> None:
     assert stderr == ""
 
 
-def test_hook_post_edit_emits_diagnostics_on_shape_error(tmp_path: Path) -> None:
-    """Error-severity diagnostics → hook prints the JSON report to stderr, exit 0."""
+def test_hook_post_edit_emits_envelope_on_shape_error(tmp_path: Path) -> None:
+    """Error-severity diagnostics → hook prints Claude Code's PostToolUse JSON
+    envelope to stdout so ``additionalContext`` is injected into the agent's
+    context. Exit is always 0; stderr is deliberately unused because Claude
+    Code discards stderr on exit-0 hooks.
+    """
     source = (
         "from typing import Annotated\n"
         "import torch\n"
@@ -225,17 +229,18 @@ def test_hook_post_edit_emits_diagnostics_on_shape_error(tmp_path: Path) -> None
     target.write_text(source, encoding="utf-8")
     payload = json.dumps({"tool_input": {"file_path": str(target)}})
     exit_code, stdout, stderr = _run_cli_with_stdin(payload, "_hook_post_edit")
-    # Hook never blocks the session — exit is always 0.
     assert exit_code == 0
-    # Report goes to stderr so it doesn't muddle the hook's stdout channel.
-    assert stdout == ""
-    assert stderr, "expected the hook to surface the diagnostic report on stderr"
-    report = json.loads(stderr)
-    assert any(
-        diag["code"] == "TSF1007"
-        for file_payload in report["files"]
-        for diag in file_payload["diagnostics"]
-    )
+    assert stderr == "", "Claude Code drops stderr on exit-0 hooks; keep it empty"
+    assert stdout, "expected a Claude Code hook JSON envelope on stdout"
+    envelope = json.loads(stdout)
+    hook_specific = envelope["hookSpecificOutput"]
+    assert hook_specific["hookEventName"] == "PostToolUse"
+    additional_context = hook_specific["additionalContext"]
+    # `additionalContext` must carry the diagnostic payload so the agent can act.
+    assert "TSF1007" in additional_context
+    assert "expected last dim = 768" in additional_context
+    # And it must respect Claude Code's documented 10k-character cap.
+    assert len(additional_context) <= 10_000
 
 
 def test_hook_post_edit_ignores_non_python_file(tmp_path: Path) -> None:
