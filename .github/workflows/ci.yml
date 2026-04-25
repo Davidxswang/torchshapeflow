@@ -84,3 +84,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev --extra mcp
       - run: uv run pytest -q
+
+  interop:
+    # Type-checker interop tests need torch installed so pyright / mypy / ty
+    # can resolve `import torch` in the fixtures. Torch is heavy (~500MB) so
+    # we opt in once on a single Linux + Python combo rather than installing
+    # it across the full test matrix.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev --extra mcp --extra examples
+      - run: uv run pytest tests/interop -q
