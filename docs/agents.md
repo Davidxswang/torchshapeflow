@@ -4,14 +4,22 @@ This page is about TorchShapeFlow's integration with AI coding agents — Claude
 Code, Cursor, Aider, Copilot, and any tool-using LLM that edits PyTorch code.
 If you are a human looking for a tutorial, read the [Quickstart](quickstart.md).
 
-## One-line install (Claude Code)
+## Install in Claude Code
+
+Two commands, in order:
 
 ```text
 /plugin marketplace add Davidxswang/torchshapeflow
-/plugin install torchshapeflow
+/plugin install torchshapeflow@torchshapeflow
 ```
 
-That registers a Claude Code plugin which ships three things:
+The first registers this repository as a plugin marketplace (Claude Code pulls
+from `main` by default; pin a release with `#v0.7.0`-style refs if you need
+reproducibility). The second installs the `torchshapeflow` plugin from that
+marketplace. The `@torchshapeflow` suffix disambiguates the plugin name from
+the marketplace name (both happen to be `torchshapeflow` here).
+
+The plugin ships three things:
 
 - An **MCP server** with tools `check`, `suggest`, and `hover_at`, launched on
   demand via `uvx` from stdio — no global install, no config-file editing.

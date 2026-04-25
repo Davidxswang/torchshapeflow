@@ -1,0 +1,14 @@
+{
+  "name": "torchshapeflow",
+  "owner": "Xuesong Wang",
+  "description": "TorchShapeFlow — static PyTorch tensor shape analysis as a Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "torchshapeflow",
+      "source": {
+        "source": "github",
+        "repo": "Davidxswang/torchshapeflow"
+      }
+    }
+  ]
+}
