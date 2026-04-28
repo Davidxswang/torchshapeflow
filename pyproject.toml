@@ -86,6 +86,7 @@ select = [
 exclude = [
   "examples",
   "tests/fixtures",
+  "tests/interop/fixtures",
 ]
 
 [tool.pytest.ini_options]
