@@ -6,6 +6,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from torchshapeflow.arithmetic import (
+    broadcast_has_uncertain_dims,
+    normalize_index,
+    product_dim,
+    quotient_dim,
+    sum_dim,
+)
 from torchshapeflow.diagnostics import Diagnostic, Severity, render_message
 from torchshapeflow.index import (
     CustomModuleTemplate,
@@ -41,13 +48,8 @@ from torchshapeflow.model import (
     TupleValue,
     UnknownDim,
     Value,
-    broadcast_has_uncertain_dims,
     make_dim,
-    normalize_index,
-    product_dim,
-    quotient_dim,
     render_dim,
-    sum_dim,
 )
 from torchshapeflow.parser import AnnotationParseError, parse_source, parse_tensor_annotation
 from torchshapeflow.report import FileReport, HoverFact, Suggestion
