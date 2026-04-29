@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from torchshapeflow.model import TensorValue, broadcast_shapes
+from torchshapeflow.arithmetic import broadcast_shapes
+from torchshapeflow.model import TensorValue
 
 
 def infer_binary_broadcast(left: TensorValue, right: TensorValue) -> TensorValue | None:

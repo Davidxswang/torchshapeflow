@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from torchshapeflow.model import (
-    ConstantDim,
-    ExpressionDim,
-    SymbolicDim,
-    TensorShape,
+from torchshapeflow.arithmetic import (
     batch_matmul_shape,
     broadcast_shapes,
     normalize_index,
     product_dim,
     quotient_dim,
     sum_dim,
+)
+from torchshapeflow.model import (
+    ConstantDim,
+    ExpressionDim,
+    SymbolicDim,
+    TensorShape,
 )
 
 

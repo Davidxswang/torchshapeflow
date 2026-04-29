@@ -16,13 +16,14 @@ from torchshapeflow.model import (
     TensorValue,
     TupleValue,
 )
+from torchshapeflow.rules.concat import infer_chunk, infer_split
 from torchshapeflow.rules.conv2d import infer_conv2d
 from torchshapeflow.rules.embedding import infer_embedding
 from torchshapeflow.rules.indexing import infer_subscript
+from torchshapeflow.rules.linalg import infer_reduction
 from torchshapeflow.rules.linear import infer_linear
 from torchshapeflow.rules.lstm import infer_lstm
 from torchshapeflow.rules.pool2d import infer_pool2d
-from torchshapeflow.rules.shape_ops import infer_chunk, infer_reduction, infer_split
 
 
 def _t(*dims: int | str) -> TensorValue:
