@@ -3,17 +3,32 @@ from __future__ import annotations
 import ast
 import copy
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from torchshapeflow.analysis_context import ModuleContext
 from torchshapeflow.arithmetic import (
     broadcast_has_uncertain_dims,
     normalize_index,
-    product_dim,
-    quotient_dim,
-    sum_dim,
 )
-from torchshapeflow.diagnostics import Diagnostic, Severity, render_message
+from torchshapeflow.ast_helpers import (
+    alias_target_node,
+    arange_length,
+    body_terminates_with_return,
+    contains_top_level_yield,
+    dim_binop,
+    infer_repeat_call,
+    int_or_tuple,
+    int_pair,
+    is_first_iteration_test,
+    keyword_int,
+    keyword_or_default,
+    pool_stride,
+    positional_int,
+    reduction_dim,
+    reduction_keepdim,
+    shapes_definitely_mismatch,
+    split_from_call,
+)
 from torchshapeflow.index import (
     CustomModuleTemplate,
     FuncSig,
@@ -274,105 +289,6 @@ _MODULE_SPEC_TYPES = (
 )
 
 
-@dataclass
-class ModuleContext:
-    path: Path
-    diagnostics: list[Diagnostic] = field(default_factory=list)
-    hovers: list[HoverFact] = field(default_factory=list)
-    suggestions: list[Suggestion] = field(default_factory=list)
-    aliases: dict[str, TensorValue] = field(default_factory=dict)
-    func_sigs: dict[str, FuncSig] = field(default_factory=dict)
-    return_shape: TensorValue | None = None
-    collected_returns: list[TensorValue | None] = field(default_factory=list)
-    in_annotated_function: bool = False
-    # Scalar self.attr values from __init__ (e.g. self.hidden = hidden_dim → SymbolicDim).
-    self_scalars: dict[str, Dim] = field(default_factory=dict)
-    # Tensor self.attr values captured from __init__ (e.g. register_buffer or direct assignment).
-    self_tensors: dict[str, TensorValue] = field(default_factory=dict)
-    # Method signatures for the current class being analyzed.
-    method_sigs: dict[str, FuncSig] = field(default_factory=dict)
-
-    def error(
-        self,
-        node: ast.AST,
-        code: str,
-        message: str,
-        severity: Severity = "error",
-    ) -> None:
-        """Append a diagnostic at the location of *node*.
-
-        Line numbers are 1-based (from ast); column offsets are converted from
-        0-based (ast) to 1-based by adding 1.
-        """
-        self.diagnostics.append(
-            Diagnostic(
-                code=code,
-                message=message,
-                path=self.path,
-                line=getattr(node, "lineno", 1),
-                column=getattr(node, "col_offset", 0) + 1,
-                severity=severity,
-            )
-        )
-
-    def shape_error(
-        self,
-        node: ast.AST,
-        code: str,
-        summary: str,
-        *,
-        expected: str | None = None,
-        actual: str | None = None,
-        hint: str | None = None,
-        severity: Severity = "error",
-    ) -> None:
-        """Append a shape-mismatch diagnostic with structured fields.
-
-        Structured fields are the source of truth; the human-readable message
-        is rendered from them via ``render_message`` to keep prose and data in
-        sync. Agents and editors can consume ``expected`` / ``actual`` /
-        ``hint`` directly from JSON output.
-        """
-        self.diagnostics.append(
-            Diagnostic(
-                code=code,
-                message=render_message(summary, expected=expected, actual=actual, hint=hint),
-                path=self.path,
-                line=getattr(node, "lineno", 1),
-                column=getattr(node, "col_offset", 0) + 1,
-                severity=severity,
-                expected=expected,
-                actual=actual,
-                hint=hint,
-            )
-        )
-
-    def hover(self, name: str, node: ast.AST, tensor: TensorValue) -> None:
-        self.hovers.append(
-            HoverFact(
-                line=getattr(node, "lineno", 1),
-                column=getattr(node, "col_offset", 0) + 1,
-                end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1)),
-                end_column=getattr(node, "end_col_offset", getattr(node, "col_offset", 0)) + 1,
-                name=name,
-                shape=str(tensor.shape),
-            )
-        )
-
-    def hover_alias(self, name: str, node: ast.AST, tensor: TensorValue) -> None:
-        self.hovers.append(
-            HoverFact(
-                line=getattr(node, "lineno", 1),
-                column=getattr(node, "col_offset", 0) + 1,
-                end_line=getattr(node, "end_lineno", getattr(node, "lineno", 1)),
-                end_column=getattr(node, "end_col_offset", getattr(node, "col_offset", 0)) + 1,
-                name=name,
-                shape=str(tensor.shape),
-                kind="alias",
-            )
-        )
-
-
 def analyze_path(path: Path, project_index: ProjectIndex | None = None) -> FileReport:
     source = path.read_text(encoding="utf-8")
     return analyze_source(source, path, project_index)
@@ -512,7 +428,7 @@ def _emit_module_alias_hovers(module: ast.Module, context: ModuleContext) -> Non
             continue
         alias_name, alias_node = alias
         tensor = context.aliases.get(alias_name)
-        target = _alias_target_node(statement)
+        target = alias_target_node(statement)
         if tensor is not None and target is not None:
             context.hover_alias(alias_name, target, tensor)
 
@@ -563,10 +479,10 @@ def _parse_module_spec(
     if name.endswith("Conv2d") and len(node.args) >= 3:
         in_channels = _int(node.args[0])  # may be None (non-literal)
         out_channels = _sym(node.args[1])
-        kernel_size = _int_pair(node.args[2])
-        stride = _int_pair(_keyword_or_default(node, "stride"), default=(1, 1))
-        padding = _int_pair(_keyword_or_default(node, "padding"), default=(0, 0))
-        dilation = _int_pair(_keyword_or_default(node, "dilation"), default=(1, 1))
+        kernel_size = int_pair(node.args[2])
+        stride = int_pair(keyword_or_default(node, "stride"), default=(1, 1))
+        padding = int_pair(keyword_or_default(node, "padding"), default=(0, 0))
+        dilation = int_pair(keyword_or_default(node, "dilation"), default=(1, 1))
         if None not in (out_channels, kernel_size, stride, padding, dilation):
             assert out_channels is not None
             assert kernel_size is not None
@@ -586,20 +502,20 @@ def _parse_module_spec(
         if embedding_dim is not None:
             return EmbeddingSpec(embedding_dim=embedding_dim)
     if name.endswith("MaxPool2d") and node.args:
-        kernel_size = _int_pair(node.args[0])
+        kernel_size = int_pair(node.args[0])
         if kernel_size is not None:
-            stride = _pool_stride(node, kernel_size)
-            padding = _int_pair(_keyword_or_default(node, "padding"), default=(0, 0))
-            dilation = _int_pair(_keyword_or_default(node, "dilation"), default=(1, 1))
+            stride = pool_stride(node, kernel_size)
+            padding = int_pair(keyword_or_default(node, "padding"), default=(0, 0))
+            dilation = int_pair(keyword_or_default(node, "dilation"), default=(1, 1))
             if stride is not None and padding is not None and dilation is not None:
                 return Pool2dSpec(
                     kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation
                 )
     if name.endswith("AvgPool2d") and node.args:
-        kernel_size = _int_pair(node.args[0])
+        kernel_size = int_pair(node.args[0])
         if kernel_size is not None:
-            stride = _pool_stride(node, kernel_size)
-            padding = _int_pair(_keyword_or_default(node, "padding"), default=(0, 0))
+            stride = pool_stride(node, kernel_size)
+            padding = int_pair(keyword_or_default(node, "padding"), default=(0, 0))
             if stride is not None and padding is not None:
                 return Pool2dSpec(
                     kernel_size=kernel_size, stride=stride, padding=padding, dilation=(1, 1)
@@ -624,7 +540,7 @@ def _parse_module_spec(
     if short_name == "MultiheadAttention" and len(node.args) >= 2:
         embed_dim = _int(node.args[0])
         num_heads = _int(node.args[1])
-        batch_first_node = _keyword_or_default(node, "batch_first")
+        batch_first_node = keyword_or_default(node, "batch_first")
         batch_first = False
         if isinstance(batch_first_node, ast.Constant) and isinstance(batch_first_node.value, bool):
             batch_first = batch_first_node.value
@@ -632,34 +548,34 @@ def _parse_module_spec(
             return MultiheadAttentionSpec(
                 embed_dim=embed_dim, num_heads=num_heads, batch_first=batch_first
             )
-    if short_name == "LSTM" and (len(node.args) >= 2 or _keyword_or_default(node, "hidden_size")):
+    if short_name == "LSTM" and (len(node.args) >= 2 or keyword_or_default(node, "hidden_size")):
         input_size_node = (
-            node.args[0] if len(node.args) >= 1 else _keyword_or_default(node, "input_size")
+            node.args[0] if len(node.args) >= 1 else keyword_or_default(node, "input_size")
         )
         hidden_size_node = (
-            node.args[1] if len(node.args) >= 2 else _keyword_or_default(node, "hidden_size")
+            node.args[1] if len(node.args) >= 2 else keyword_or_default(node, "hidden_size")
         )
         if hidden_size_node is None:
             return None
         input_size = _int(input_size_node) if input_size_node is not None else None
         hidden_size = _sym(hidden_size_node)
         proj_size: int | str | None = None
-        proj_size_arg = _keyword_or_default(node, "proj_size")
+        proj_size_arg = keyword_or_default(node, "proj_size")
         if proj_size_arg is not None:
             proj_size = _sym(proj_size_arg)
         num_layers: int | str = 1
         num_layers_arg = (
-            node.args[2] if len(node.args) >= 3 else _keyword_or_default(node, "num_layers")
+            node.args[2] if len(node.args) >= 3 else keyword_or_default(node, "num_layers")
         )
         if num_layers_arg is not None:
             parsed = _sym(num_layers_arg)
             if parsed is not None:
                 num_layers = parsed
-        batch_first_node = _keyword_or_default(node, "batch_first")
+        batch_first_node = keyword_or_default(node, "batch_first")
         batch_first = False
         if isinstance(batch_first_node, ast.Constant) and isinstance(batch_first_node.value, bool):
             batch_first = batch_first_node.value
-        bidirectional_node = _keyword_or_default(node, "bidirectional")
+        bidirectional_node = keyword_or_default(node, "bidirectional")
         bidirectional = False
         if isinstance(bidirectional_node, ast.Constant) and isinstance(
             bidirectional_node.value, bool
@@ -687,7 +603,7 @@ def _bind_custom_module_template(
         if index < len(call.args):
             arg_node = call.args[index]
         else:
-            arg_node = _keyword_or_default(call, param_name)
+            arg_node = keyword_or_default(call, param_name)
         dim_value = _dim_symbol_from_ast(arg_node) if arg_node is not None else None
         if dim_value is not None:
             mapping[param_name] = make_dim(dim_value)
@@ -856,7 +772,7 @@ def _resolve_loop_expr(
 ) -> ast.expr:
     if isinstance(node, ast.Name) and node.id in bindings:
         return _resolve_loop_expr(bindings[node.id], bindings, loop_var, is_first=is_first)
-    if isinstance(node, ast.IfExp) and _is_first_iteration_test(node.test, loop_var):
+    if isinstance(node, ast.IfExp) and is_first_iteration_test(node.test, loop_var):
         branch = node.body if is_first else node.orelse
         return _resolve_loop_expr(branch, bindings, loop_var, is_first=is_first)
     if isinstance(node, ast.Call):
@@ -886,67 +802,6 @@ def _resolve_loop_expr(
             ctx=node.ctx,
         )
     return node
-
-
-def _is_first_iteration_test(test: ast.AST, loop_var: str) -> bool:
-    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or len(test.comparators) != 1:
-        return False
-    left = test.left
-    right = test.comparators[0]
-    return isinstance(test.ops[0], ast.Eq) and (
-        (
-            isinstance(left, ast.Name)
-            and left.id == loop_var
-            and isinstance(right, ast.Constant)
-            and right.value == 0
-        )
-        or (
-            isinstance(right, ast.Name)
-            and right.id == loop_var
-            and isinstance(left, ast.Constant)
-            and left.value == 0
-        )
-    )
-
-
-def _keyword_or_default(call: ast.Call, name: str) -> ast.AST | None:
-    for keyword in call.keywords:
-        if keyword.arg == name:
-            return keyword.value
-    return None
-
-
-def _int_pair(
-    node: ast.AST | None,
-    default: tuple[int, int] | None = None,
-) -> tuple[int, int] | None:
-    if node is None:
-        return default
-    single = int_from_ast(node)
-    if single is not None:
-        return single, single
-    if isinstance(node, ast.Tuple) and len(node.elts) == 2:
-        first = int_from_ast(node.elts[0])
-        second = int_from_ast(node.elts[1])
-        if first is not None and second is not None:
-            return first, second
-    return None
-
-
-def _pool_stride(call: ast.Call, kernel_size: tuple[int, int]) -> tuple[int, int] | None:
-    """Return the effective stride for a pooling call.
-
-    PyTorch pool layers default stride to kernel_size when the argument is absent.
-    Checks positional arg[1] first, then the ``stride`` keyword.
-    """
-    stride_node: ast.AST | None = None
-    if len(call.args) >= 2:
-        stride_node = call.args[1]
-    else:
-        stride_node = _keyword_or_default(call, "stride")
-    if stride_node is None:
-        return kernel_size
-    return _int_pair(stride_node)
 
 
 def _analyze_function(
@@ -995,53 +850,6 @@ def _emit_function_annotation_hovers(function: ast.FunctionDef, context: ModuleC
     _, _, tensor_params, return_shape = _collect_function_annotations(function, context)
     if tensor_params:
         _emit_signature_hover(function, tensor_params, return_shape, [], context)
-
-
-def _contains_top_level_yield(body: list[ast.stmt]) -> bool:
-    """True iff *body* contains a ``yield`` or ``yield from`` at its own scope.
-
-    A ``yield`` in the outer function makes that function a generator — calling
-    it returns a ``Generator[...]`` object, never the tensor the ``return``
-    statement names (which becomes the ``StopIteration`` value). We must not
-    propose a plain-tensor return annotation for generators.
-
-    Walks the statement tree but does not descend into nested ``def``,
-    ``async def``, or ``lambda`` bodies: a yield inside one of those makes the
-    inner callable a generator, not the outer one.
-    """
-    stack: list[ast.AST] = list(body)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, (ast.Yield, ast.YieldFrom)):
-            return True
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            continue
-        stack.extend(ast.iter_child_nodes(node))
-    return False
-
-
-def _body_terminates_with_return(body: list[ast.stmt]) -> bool:
-    """True iff *body* provably ends by returning a value.
-
-    Recognizes:
-    - A trailing ``return X`` (with value) at the end of the body.
-    - A trailing ``raise`` (function exits without falling through to None).
-    - A trailing ``if`` with ``else`` where every branch terminates.
-
-    Loops, ``try``/``except``, ``match``, and bare ``return`` (no value) yield
-    False — an honest "don't know" that keeps ``tsf suggest`` silent rather
-    than asserting a shape contract the analyzer cannot prove.
-    """
-    if not body:
-        return False
-    last = body[-1]
-    if isinstance(last, ast.Return) and last.value is not None:
-        return True
-    if isinstance(last, ast.Raise):
-        return True
-    if isinstance(last, ast.If) and last.orelse:
-        return _body_terminates_with_return(last.body) and _body_terminates_with_return(last.orelse)
-    return False
 
 
 def _first_annotated_param_template(
@@ -1146,7 +954,7 @@ def _maybe_suggest_return_annotation(
     - The function has no return annotation at all (``function.returns`` is None).
     - Analyzing the function body added no new error-severity diagnostics —
       TSF must not propose a contract on code it has also flagged as broken.
-    - ``_body_terminates_with_return`` proves every exit path returns a value
+    - ``body_terminates_with_return`` proves every exit path returns a value
       (guards against implicit fallthrough → None and bare ``return``).
     - Every collected return expression produced a ``TensorValue`` with the
       same shape.
@@ -1175,9 +983,9 @@ def _maybe_suggest_return_annotation(
     errors_after = sum(1 for d in context.diagnostics if d.severity == "error")
     if errors_after > errors_before:
         return
-    if _contains_top_level_yield(function.body):
+    if contains_top_level_yield(function.body):
         return
-    if not _body_terminates_with_return(function.body):
+    if not body_terminates_with_return(function.body):
         return
     inferred = next(r for r in collected_returns if r is not None)
     template = _first_annotated_param_template(function, {name for name, _ in tensor_params})
@@ -1384,7 +1192,7 @@ def _analyze_statement(
             return
         if alias_value is not None:
             aliases[alias_name] = alias_value
-            target = _alias_target_node(statement)
+            target = alias_target_node(statement)
             if target is not None:
                 context.hover_alias(alias_name, target, alias_value)
             return
@@ -1441,7 +1249,7 @@ def _analyze_statement(
             else None
         )
         if declared is not None:
-            if isinstance(value, TensorValue) and _shapes_definitely_mismatch(
+            if isinstance(value, TensorValue) and shapes_definitely_mismatch(
                 declared.shape, value.shape
             ):
                 context.error(
@@ -1459,7 +1267,7 @@ def _analyze_statement(
         if isinstance(actual, TensorValue):
             if not isinstance(statement.value, ast.Name):
                 context.hover("<return>", statement.value, actual)
-            if context.return_shape is not None and _shapes_definitely_mismatch(
+            if context.return_shape is not None and shapes_definitely_mismatch(
                 context.return_shape.shape, actual.shape
             ):
                 context.error(
@@ -1532,28 +1340,6 @@ def _merge_aliases(
                 aliases[key] = pre_aliases[key]
         elif key in pre_aliases:
             aliases[key] = pre_aliases[key]
-
-
-def _alias_target_node(statement: ast.stmt) -> ast.Name | None:
-    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
-        target = statement.targets[0]
-        if isinstance(target, ast.Name):
-            return target
-        return None
-    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
-        return statement.target
-    alias_name = _type_alias_name_node(statement)
-    if alias_name is not None:
-        return alias_name
-    return None
-
-
-def _type_alias_name_node(statement: ast.stmt) -> ast.Name | None:
-    type_alias_cls = getattr(ast, "TypeAlias", None)
-    if type_alias_cls is None or not isinstance(statement, type_alias_cls):
-        return None
-    name = getattr(statement, "name", None)
-    return name if isinstance(name, ast.Name) else None
 
 
 def _maybe_hover_alias_reference(
@@ -2120,7 +1906,7 @@ def _eval_call(
             return _reshape_from_args(tensor, node.args[1:], context, node, env, module_specs)
     if callee_name.endswith("cat") and node.args:
         values = _tensor_sequence(node.args[0], env, context, module_specs)
-        dim = _keyword_int(node, "dim", 0)
+        dim = keyword_int(node, "dim", 0)
         if values is not None and dim is not None:
             result = infer_cat(values, dim)
             if result is None:
@@ -2132,7 +1918,7 @@ def _eval_call(
             return result
     if callee_name.endswith("stack") and node.args:
         values = _tensor_sequence(node.args[0], env, context, module_specs)
-        dim = _keyword_int(node, "dim", 0)
+        dim = keyword_int(node, "dim", 0)
         if values is not None and dim is not None:
             result = infer_stack(values, dim)
             if result is None:
@@ -2165,8 +1951,8 @@ def _eval_call(
         if len(node.args) >= 3:
             tensor = _eval_expr(node.args[0], env, context, module_specs)
             if isinstance(tensor, TensorValue):
-                src = _int_or_tuple(node.args[1])
-                dst = _int_or_tuple(node.args[2])
+                src = int_or_tuple(node.args[1])
+                dst = int_or_tuple(node.args[2])
                 if src is not None and dst is not None:
                     result = infer_movedim(tensor, src, dst)
                     if result is None:
@@ -2216,8 +2002,8 @@ def _eval_call(
     if callee_leaf in _REDUCTION_OPS and node.args:
         tensor = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(tensor, TensorValue):
-            rdim = _reduction_dim(node, arg_offset=1)
-            keepdim = _reduction_keepdim(node, positional_index=2)
+            rdim = reduction_dim(node, arg_offset=1)
+            keepdim = reduction_keepdim(node, positional_index=2)
             return infer_reduction(tensor, rdim, keepdim)
     # Functional passthrough: torch.softmax(x, dim=-1), F.relu(x), torch.triu(x), etc.
     if callee_leaf in _FUNCTIONAL_PASSTHROUGH and node.args:
@@ -2232,7 +2018,7 @@ def _eval_call(
             if len(node.args) >= 2:
                 num_classes = int_from_ast(node.args[1])
             if num_classes is None:
-                nc_node = _keyword_or_default(node, "num_classes")
+                nc_node = keyword_or_default(node, "num_classes")
                 if nc_node is not None:
                     num_classes = int_from_ast(nc_node)
             if num_classes is not None:
@@ -2244,12 +2030,12 @@ def _eval_call(
         if isinstance(tensor, TensorValue):
             k_val = int_from_ast(node.args[1]) if len(node.args) >= 2 else None
             if k_val is None:
-                k_node = _keyword_or_default(node, "k")
+                k_node = keyword_or_default(node, "k")
                 if k_node is not None:
                     k_val = int_from_ast(k_node)
-            dim_val = _positional_int(node.args, 2, -1)
+            dim_val = positional_int(node.args, 2, -1)
             if dim_val is None:
-                dim_val = _keyword_int(node, "dim", -1)
+                dim_val = keyword_int(node, "dim", -1)
             if dim_val is None:
                 dim_val = -1
             if k_val is not None:
@@ -2263,19 +2049,19 @@ def _eval_call(
     if callee_leaf == "diagonal" and node.args:
         tensor = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(tensor, TensorValue):
-            offset_val = _positional_int(node.args, 1, None)
+            offset_val = positional_int(node.args, 1, None)
             if offset_val is None:
-                offset_val = _keyword_int(node, "offset", 0)
+                offset_val = keyword_int(node, "offset", 0)
             if offset_val is None:
                 offset_val = 0
-            dim1_val = _positional_int(node.args, 2, None)
+            dim1_val = positional_int(node.args, 2, None)
             if dim1_val is None:
-                dim1_val = _keyword_int(node, "dim1", 0)
+                dim1_val = keyword_int(node, "dim1", 0)
             if dim1_val is None:
                 dim1_val = 0
-            dim2_val = _positional_int(node.args, 3, None)
+            dim2_val = positional_int(node.args, 3, None)
             if dim2_val is None:
-                dim2_val = _keyword_int(node, "dim2", 1)
+                dim2_val = keyword_int(node, "dim2", 1)
             if dim2_val is None:
                 dim2_val = 1
             return infer_diagonal(tensor, offset_val, dim1_val, dim2_val)
@@ -2291,7 +2077,7 @@ def _eval_call(
             return TensorValue(TensorShape(tuple(dims)))
     # torch.arange(n) → 1-D tensor.
     if callee_leaf == "arange" and node.args:
-        arange_len = _arange_length(node)
+        arange_len = arange_length(node)
         if arange_len is not None:
             return TensorValue(TensorShape((ConstantDim(arange_len),)))
         arange_dim: Dim = (
@@ -2310,9 +2096,9 @@ def _eval_call(
         tensor_arg = _eval_expr(node.args[0], env, context, module_specs)
         if isinstance(tensor_arg, TensorValue):
             size_node = node.args[1]
-            dim = _positional_int(node.args, 2, None)
+            dim = positional_int(node.args, 2, None)
             if dim is None:
-                dim = _keyword_int(node, "dim", 0)
+                dim = keyword_int(node, "dim", 0)
             if dim is None:
                 dim = 0
             if isinstance(size_node, (ast.List, ast.Tuple)):
@@ -2383,8 +2169,8 @@ def _eval_tensor_method(
             context.error(node, "TSF1008", "Invalid transpose dimensions.")
         return result
     if name == "flatten":
-        start_dim = _positional_int(node.args, 0, 0)
-        end_dim = _positional_int(node.args, 1, -1)
+        start_dim = positional_int(node.args, 0, 0)
+        end_dim = positional_int(node.args, 1, -1)
         if start_dim is None or end_dim is None:
             if context.in_annotated_function:
                 context.error(
@@ -2399,7 +2185,7 @@ def _eval_tensor_method(
             context.error(node, "TSF1004", "Invalid flatten dimensions.")
         return result
     if name == "squeeze":
-        dim = _positional_int(node.args, 0, None)
+        dim = positional_int(node.args, 0, None)
         result = infer_squeeze(tensor, dim)
         if result is None:
             context.error(node, "TSF1008", "Invalid squeeze dimension.")
@@ -2420,7 +2206,7 @@ def _eval_tensor_method(
             context.error(node, "TSF1008", "Invalid unsqueeze dimension.")
         return result
     if name == "size":
-        dim = _positional_int(node.args, 0, None)
+        dim = positional_int(node.args, 0, None)
         return infer_size(tensor, dim)
     if name == "matmul" and node.args:
         right = _eval_expr(node.args[0], env, context, module_specs)
@@ -2437,8 +2223,8 @@ def _eval_tensor_method(
                 _emit_mm_mismatch(context, node, tensor, right)
             return result
     if name in _REDUCTION_OPS:
-        rdim = _reduction_dim(node, arg_offset=0)
-        keepdim = _reduction_keepdim(node, positional_index=1)
+        rdim = reduction_dim(node, arg_offset=0)
+        keepdim = reduction_keepdim(node, positional_index=1)
         return infer_reduction(tensor, rdim, keepdim)
     if name in _PASSTHROUGH_METHODS:
         return tensor
@@ -2449,42 +2235,42 @@ def _eval_tensor_method(
         if isinstance(other, TensorValue):
             return TensorValue(other.shape)
     if name == "repeat" and node.args:
-        return _infer_repeat(tensor, node, env, context, module_specs)
+        return infer_repeat_call(tensor, node)
     if name == "chunk" and node.args:
         n = int_from_ast(node.args[0])
         if n is not None:
-            dim = _positional_int(node.args, 1, None)
+            dim = positional_int(node.args, 1, None)
             if dim is None:
-                dim = _keyword_int(node, "dim", 0)
+                dim = keyword_int(node, "dim", 0)
             if dim is not None:
                 chunk_result = infer_chunk(tensor, n, dim)
                 if chunk_result is None:
                     context.error(node, "TSF1008", "Invalid chunk dimension.")
                 return chunk_result
     if name == "split" and node.args:
-        split_result = _split_from_call(tensor, node)
+        split_result = split_from_call(tensor, node)
         if split_result is not None:
             return split_result
     if name == "movedim" and len(node.args) >= 2:
-        src = _int_or_tuple(node.args[0])
-        dst = _int_or_tuple(node.args[1])
+        src = int_or_tuple(node.args[0])
+        dst = int_or_tuple(node.args[1])
         if src is not None and dst is not None:
             result = infer_movedim(tensor, src, dst)
             if result is None:
                 context.error(node, "TSF1008", "Invalid movedim dimensions.")
             return result
     if name == "diagonal":
-        offset_val = _positional_int(node.args, 0, 0)
+        offset_val = positional_int(node.args, 0, 0)
         if offset_val is None:
             offset_val = 0
-        dim1_val = _positional_int(node.args, 1, None)
+        dim1_val = positional_int(node.args, 1, None)
         if dim1_val is None:
-            dim1_val = _keyword_int(node, "dim1", 0)
+            dim1_val = keyword_int(node, "dim1", 0)
         if dim1_val is None:
             dim1_val = 0
-        dim2_val = _positional_int(node.args, 2, None)
+        dim2_val = positional_int(node.args, 2, None)
         if dim2_val is None:
-            dim2_val = _keyword_int(node, "dim2", 1)
+            dim2_val = keyword_int(node, "dim2", 1)
         if dim2_val is None:
             dim2_val = 1
         return infer_diagonal(tensor, offset_val, dim1_val, dim2_val)
@@ -2500,12 +2286,12 @@ def _eval_tensor_method(
     if name == "topk" and node.args:
         k_val = int_from_ast(node.args[0])
         if k_val is None:
-            k_node = _keyword_or_default(node, "k")
+            k_node = keyword_or_default(node, "k")
             if k_node is not None:
                 k_val = int_from_ast(k_node)
-        dim_val = _positional_int(node.args, 1, None)
+        dim_val = positional_int(node.args, 1, None)
         if dim_val is None:
-            dim_val = _keyword_int(node, "dim", -1)
+            dim_val = keyword_int(node, "dim", -1)
         if dim_val is None:
             dim_val = -1
         if k_val is not None:
@@ -2549,23 +2335,6 @@ def _reshape_from_args(
     return infer_reshape(tensor, tuple(requested))
 
 
-def _dim_binop(op: ast.operator, left: Dim | int, right: Dim | int) -> Dim | None:
-    """Apply an arithmetic operator to two dims, returning a combined Dim."""
-    ld = ConstantDim(left) if isinstance(left, int) else left
-    rd = ConstantDim(right) if isinstance(right, int) else right
-    if isinstance(op, ast.Mult):
-        return product_dim((ld, rd))
-    if isinstance(op, ast.Add):
-        return sum_dim((ld, rd))
-    if isinstance(op, ast.Sub):
-        if isinstance(ld, ConstantDim) and isinstance(rd, ConstantDim):
-            return ConstantDim(ld.value - rd.value)
-        return ExpressionDim(f"({render_dim(ld)} - {render_dim(rd)})")
-    if isinstance(op, ast.FloorDiv):
-        return quotient_dim((ld,), (rd,))
-    return None
-
-
 def _dim_from_expr(
     node: ast.AST,
     env: dict[str, Value],
@@ -2591,7 +2360,7 @@ def _dim_from_expr(
         left = _dim_from_expr(node.left, env, context, module_specs)
         right = _dim_from_expr(node.right, env, context, module_specs)
         if left is not None and right is not None:
-            return _dim_binop(node.op, left, right)
+            return dim_binop(node.op, left, right)
     value = _eval_expr(node, env, context, module_specs)
     if isinstance(value, IntegerValue):
         if value.value is not None:
@@ -2623,88 +2392,6 @@ def _tensor_sequence(
             return None
         values.append(value)
     return tuple(values)
-
-
-def _int_or_tuple(node: ast.expr) -> int | tuple[int, ...] | None:
-    """Parse an AST node as an int or a tuple/list of ints (for movedim source/destination)."""
-    v = int_from_ast(node)
-    if v is not None:
-        return v
-    if isinstance(node, (ast.Tuple, ast.List)):
-        parts: list[int] = []
-        for elt in node.elts:
-            i = int_from_ast(elt)
-            if i is None:
-                return None
-            parts.append(i)
-        return tuple(parts)
-    return None
-
-
-def _keyword_int(node: ast.Call, name: str, default: int | None) -> int | None:
-    for keyword in node.keywords:
-        if keyword.arg == name:
-            return int_from_ast(keyword.value)
-    return default
-
-
-def _positional_int(
-    args: Sequence[ast.expr],
-    index: int,
-    default: int | None,
-) -> int | None:
-    if index >= len(args):
-        return default
-    return int_from_ast(args[index])
-
-
-def _reduction_dim(node: ast.Call, arg_offset: int) -> int | tuple[int, ...] | None:
-    """Extract the ``dim`` argument from a reduction call."""
-    dim_node: ast.AST | None = None
-    if len(node.args) > arg_offset:
-        dim_node = node.args[arg_offset]
-    else:
-        for kw in node.keywords:
-            if kw.arg == "dim":
-                dim_node = kw.value
-                break
-    if dim_node is None:
-        return None
-    if isinstance(dim_node, ast.Tuple):
-        ints = [int_from_ast(elt) for elt in dim_node.elts]
-        if any(i is None for i in ints):
-            return None
-        return tuple(int(i) for i in ints if i is not None)
-    return int_from_ast(dim_node)
-
-
-def _reduction_keepdim(node: ast.Call, positional_index: int) -> bool:
-    """Extract the ``keepdim`` flag from a reduction call (keyword or positional bool)."""
-    for kw in node.keywords:
-        if kw.arg == "keepdim":
-            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, bool):
-                return kw.value.value
-    if len(node.args) > positional_index:
-        arg = node.args[positional_index]
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, bool):
-            return arg.value
-    return False
-
-
-def _shapes_definitely_mismatch(declared: TensorShape, actual: TensorShape) -> bool:
-    """Return True only when the shapes are provably incompatible."""
-    if declared.rank != actual.rank:
-        return True
-    for d, a in zip(declared.dims, actual.dims, strict=True):
-        if isinstance(d, ConstantDim) and isinstance(a, ConstantDim) and d.value != a.value:
-            return True
-        if isinstance(d, SymbolicDim) and isinstance(a, SymbolicDim) and d.name != a.name:
-            return True
-        if isinstance(d, ConstantDim) and isinstance(a, SymbolicDim):
-            return True
-        if isinstance(d, SymbolicDim) and isinstance(a, ConstantDim):
-            return True
-    return False
 
 
 def _size_to_dim(
@@ -2755,24 +2442,6 @@ def _constructor_size(
     return [_size_to_dim(a, env, context, module_specs) for a in node.args]
 
 
-def _arange_length(node: ast.Call) -> int | None:
-    """Return the number of elements in a ``torch.arange`` call if constant."""
-    if len(node.args) == 1:
-        return int_from_ast(node.args[0])
-    if len(node.args) == 2:
-        start = int_from_ast(node.args[0])
-        end = int_from_ast(node.args[1])
-        if start is not None and end is not None and end >= start:
-            return end - start
-    if len(node.args) == 3:
-        start = int_from_ast(node.args[0])
-        end = int_from_ast(node.args[1])
-        step = int_from_ast(node.args[2])
-        if start is not None and end is not None and step is not None and step > 0:
-            return (end - start + step - 1) // step
-    return None
-
-
 def _infer_expand(
     tensor: TensorValue,
     node: ast.Call,
@@ -2797,53 +2466,6 @@ def _infer_expand(
     return TensorValue(TensorShape(tuple(result_dims)))
 
 
-def _infer_repeat(
-    tensor: TensorValue,
-    node: ast.Call,
-    env: dict[str, Value],
-    context: ModuleContext,
-    module_specs: dict[str, ModuleSpec],
-) -> TensorValue:
-    """Infer output shape of ``x.repeat(*repeats)``."""
-    size_nodes: list[ast.expr] = list(node.args)
-    if len(size_nodes) == 1 and isinstance(size_nodes[0], (ast.Tuple, ast.List)):
-        size_nodes = list(size_nodes[0].elts)
-    n = len(size_nodes)
-    rank = tensor.rank
-    if n < rank:
-        return tensor
-    padded: tuple[Dim, ...] = (ConstantDim(1),) * (n - rank) + tensor.shape.dims
-    result_dims: list[Dim] = []
-    for d, size_node in zip(padded, size_nodes, strict=True):
-        repeat_val = int_from_ast(size_node)
-        if repeat_val is not None:
-            result_dims.append(product_dim((ConstantDim(repeat_val), d)))
-        else:
-            result_dims.append(ExpressionDim(f"{d}*?"))
-    return TensorValue(TensorShape(tuple(result_dims)))
-
-
-def _split_from_call(tensor: TensorValue, node: ast.Call) -> TensorTupleValue | None:
-    """Parse split arguments from a ``.split(size_or_sections, dim)`` call."""
-    if not node.args:
-        return None
-    size_node = node.args[0]
-    dim = _positional_int(node.args, 1, None)
-    if dim is None:
-        dim = _keyword_int(node, "dim", 0)
-    if dim is None:
-        dim = 0
-    if isinstance(size_node, (ast.List, ast.Tuple)):
-        sizes = [int_from_ast(e) for e in size_node.elts]
-        if any(s is None for s in sizes):
-            return None
-        return infer_split(tensor, [s for s in sizes if s is not None], dim)
-    split_size = int_from_ast(size_node)
-    if split_size is not None:
-        return infer_split(tensor, split_size, dim)
-    return None
-
-
 def _interpolate_size_arg(
     node: ast.Call,
     n_spatial: int,
@@ -2856,7 +2478,7 @@ def _interpolate_size_arg(
     if len(node.args) >= 2:
         size_node = node.args[1]
     else:
-        size_node = _keyword_or_default(node, "size")
+        size_node = keyword_or_default(node, "size")
     if size_node is None:
         return None
     # Variable reference (e.g. label.shape[-2:]) → evaluate as ShapeTupleValue.
@@ -2881,7 +2503,7 @@ def _interpolate_size_arg(
 
 def _interpolate_scale_arg(node: ast.Call, n_spatial: int) -> tuple[float, ...] | None:
     """Extract the ``scale_factor`` argument from an ``F.interpolate`` call."""
-    scale_node = _keyword_or_default(node, "scale_factor")
+    scale_node = keyword_or_default(node, "scale_factor")
     if scale_node is None:
         return None
     if isinstance(scale_node, ast.Constant) and isinstance(scale_node.value, (int, float)):
