@@ -47,8 +47,7 @@ def analyze_statement(
     module_specs: dict[str, ModuleSpec],
     aliases: dict[str, TensorValue],
 ) -> None:
-    # Late import: _eval_expr still lives in analyzer/__init__.py.
-    from torchshapeflow.analyzer import _eval_expr
+    from torchshapeflow.analyzer.expressions import eval_expr as _eval_expr
 
     alias = extract_alias_binding(statement)
     if alias is not None:
